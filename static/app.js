@@ -7,12 +7,12 @@ let pollInterval = null;
 
 // Method descriptions
 const METHOD_DESCRIPTIONS = {
-    'auto_multi_pass': '4 passes: OCR Table (300), OCR Aggressive (400), OCR Plain (450), Text Direct (final sweep)',
+    'auto_multi_pass': 'Smart 3-pass optimized for catalogs: Native text → OCR+Tables → Targeted rescan of low-confidence pages',
     'text_direct': 'Fast extraction from text-based PDFs',
-    'ocr_table': 'OCR with table detection - best for structured data',
-    'ocr_plain': 'OCR without table detection - good for unstructured text',
-    'ocr_aggressive': 'High-DPI OCR with multiple attempts - most thorough',
-    'hybrid': 'Combines multiple methods - most comprehensive'
+    'ocr_table': 'OCR with table detection - best for structured catalog data',
+    'ocr_plain': 'OCR without table detection - for unstructured text',
+    'ocr_aggressive': 'High-DPI OCR with aggressive preprocessing - for poor quality scans',
+    'hybrid': 'Combines multiple methods sequentially'
 };
 
 // Initialize

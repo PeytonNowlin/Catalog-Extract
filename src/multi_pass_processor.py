@@ -28,12 +28,12 @@ def convert_numpy_types(value):
 
 
 class MultiPassProcessor:
-    """Handles automatic multi-pass extraction."""
+    """Handles automatic multi-pass extraction optimized for catalog data."""
     
     def __init__(self, db: Session):
         self.db = db
-        self.low_confidence_threshold = 60.0
-        self.min_items_per_page = 1
+        self.low_confidence_threshold = 70.0  # Higher threshold for better quality
+        self.min_items_per_page = 2  # Expect at least 2 items per catalog page
     
     async def process_auto_multi_pass(
         self,
@@ -55,92 +55,79 @@ class MultiPassProcessor:
         
         pdf_handler = PDFHandler(pdf_path)
         pass_ids = []
+        base_dpi = options.get('dpi', 300)
         
-        # PASS 1: OCR + Tables (standard DPI, table detection)
-        logger.info(f"[AUTO-MULTI-PASS] Document {document_id} - Pass 1: OCR + Tables (DPI: {options.get('dpi', 300)})")
+        # PASS 1: Text Direct - Try native PDF text first (fastest, most accurate if available)
+        logger.info(f"[AUTO-MULTI-PASS] Document {document_id} - Pass 1: Text Direct (native PDF text extraction)")
         try:
             pass1_options = options.copy()
-            pass1_options['force_ocr'] = True
+            pass1_options['force_ocr'] = False
+            pass1_options['dpi'] = base_dpi
+            
             pass1_id = await self._run_pass(
-                document_id, "ocr_table", pdf_path, pass1_options, pass_number=1
+                document_id, "text_direct", pdf_path, pass1_options, pass_number=1
             )
             pass_ids.append(pass1_id)
             logger.info(f"[AUTO-MULTI-PASS] Document {document_id} - Pass 1 completed: Pass ID {pass1_id}")
         except Exception as e:
             logger.error(f"[AUTO-MULTI-PASS] Document {document_id} - Pass 1 failed: {e}", exc_info=True)
-            raise
+            # Continue to OCR passes
         
         if progress_callback:
-            progress_callback(33, "Pass 1 complete, analyzing results...")
+            progress_callback(25, "Pass 1 complete, starting OCR passes...")
         
         # Analyze Pass 1 results
-        pass1_stats = self._analyze_pass_results(pass1_id)
+        pass1_stats = self._analyze_pass_results(pass1_id) if pass1_id else {'avg_confidence': 0, 'items_per_page': 0, 'total_items': 0}
         logger.info(f"[AUTO-MULTI-PASS] Pass 1 stats: {pass1_stats}")
         
-        # PASS 2: OCR Aggressive (higher DPI, more preprocessing)
-        logger.info(f"[AUTO-MULTI-PASS] Document {document_id} - Pass 2: OCR Aggressive (high DPI, enhanced preprocessing)")
+        # PASS 2: OCR + Tables at optimal DPI (300 DPI is usually best for catalogs)
+        logger.info(f"[AUTO-MULTI-PASS] Document {document_id} - Pass 2: OCR + Tables (DPI: {base_dpi}, optimized for catalog structure)")
         try:
             pass2_options = options.copy()
-            pass2_options['dpi'] = 400  # Higher DPI
+            pass2_options['dpi'] = base_dpi  # Standard catalog DPI
             pass2_options['force_ocr'] = True
+            pass2_options['min_confidence'] = 50.0  # Reasonable threshold
             
             pass2_id = await self._run_pass(
-                document_id, "ocr_aggressive", pdf_path, pass2_options, pass_number=2
+                document_id, "ocr_table", pdf_path, pass2_options, pass_number=2
             )
             pass_ids.append(pass2_id)
             logger.info(f"[AUTO-MULTI-PASS] Document {document_id} - Pass 2 completed: Pass ID {pass2_id}")
         except Exception as e:
             logger.error(f"[AUTO-MULTI-PASS] Document {document_id} - Pass 2 failed: {e}", exc_info=True)
-            # Continue anyway with what we have
+            raise  # This is critical, fail if OCR doesn't work
         
         if progress_callback:
-            progress_callback(66, "Pass 2 complete, checking for gaps...")
+            progress_callback(50, "Pass 2 complete, analyzing...")
         
         # Analyze Pass 2 results
         pass2_stats = self._analyze_pass_results(pass2_id)
         logger.info(f"[AUTO-MULTI-PASS] Pass 2 stats: {pass2_stats}")
         
-        # PASS 3: Target low confidence pages with OCR Plain (different approach)
+        # PASS 3: Targeted re-scan with enhanced preprocessing for low-confidence pages
         low_confidence_pages = self._find_low_confidence_pages(document_id)
         
         if low_confidence_pages and len(low_confidence_pages) > 0:
-            logger.info(f"[AUTO-MULTI-PASS] Document {document_id} - Pass 3: OCR Plain on {len(low_confidence_pages)} low-confidence pages")
+            logger.info(f"[AUTO-MULTI-PASS] Document {document_id} - Pass 3: Enhanced OCR on {len(low_confidence_pages)} low-confidence pages")
             
             try:
-                # Create targeted pass for specific pages
+                # Same method, but target specific problematic pages
                 pass3_options = options.copy()
-                pass3_options['dpi'] = 450  # Even higher DPI
+                pass3_options['dpi'] = base_dpi  # Keep same DPI for consistency
                 pass3_options['force_ocr'] = True
+                pass3_options['min_confidence'] = 40.0  # Lower threshold for difficult pages
                 
                 pass3_id = await self._run_pass(
-                    document_id, "ocr_plain", pdf_path, pass3_options, 
+                    document_id, "ocr_table", pdf_path, pass3_options, 
                     pass_number=3, target_pages=low_confidence_pages
                 )
                 pass_ids.append(pass3_id)
                 logger.info(f"[AUTO-MULTI-PASS] Document {document_id} - Pass 3 completed: Pass ID {pass3_id}")
             except Exception as e:
                 logger.error(f"[AUTO-MULTI-PASS] Document {document_id} - Pass 3 failed: {e}", exc_info=True)
-                # Continue anyway with what we have
+                # Not critical, continue
         else:
-            logger.info(f"[AUTO-MULTI-PASS] Document {document_id} - No low confidence pages found, skipping Pass 3")
-        
-        if progress_callback:
-            progress_callback(75, "Pass 3 complete, running plain text pass...")
-        
-        # PASS 4: Plain text extraction (catch any text-based content we might have missed)
-        logger.info(f"[AUTO-MULTI-PASS] Document {document_id} - Pass 4: Text Direct (final sweep for any text content)")
-        try:
-            pass4_options = options.copy()
-            pass4_options['force_ocr'] = False  # Disable OCR, text only
-            
-            pass4_id = await self._run_pass(
-                document_id, "text_direct", pdf_path, pass4_options, pass_number=4
-            )
-            pass_ids.append(pass4_id)
-            logger.info(f"[AUTO-MULTI-PASS] Document {document_id} - Pass 4 completed: Pass ID {pass4_id}")
-        except Exception as e:
-            logger.error(f"[AUTO-MULTI-PASS] Document {document_id} - Pass 4 failed: {e}", exc_info=True)
-            # Continue anyway with what we have
+            logger.info(f"[AUTO-MULTI-PASS] Document {document_id} - No low confidence pages found, skipping targeted Pass 3")
         
         if progress_callback:
             progress_callback(100, "All passes complete, consolidating...")

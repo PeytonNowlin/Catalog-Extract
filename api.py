@@ -265,9 +265,13 @@ def consolidate_document_items(document_id: int, db: Session):
         
         logger.info(f"[CONSOLIDATE] Total items to consolidate: {len(all_items)}")
         
-        # Group by (part_number, page)
+        # Group by (part_number, page) - but handle None part numbers separately
         grouped = {}
         for item in all_items:
+            # Skip items without part numbers (likely junk)
+            if not item.part_number:
+                continue
+                
             key = (item.part_number, item.page)
             if key not in grouped:
                 grouped[key] = []
@@ -283,21 +287,30 @@ def consolidate_document_items(document_id: int, db: Session):
         
         # Create consolidated items (best from each group)
         for (part_number, page), items in grouped.items():
-            # Choose item with highest confidence
-            best_item = max(items, key=lambda x: x.confidence or 0)
+            # Prefer items with both part number AND price (more complete data)
+            items_with_price = [i for i in items if i.price_value and i.price_value > 0]
             
-            consolidated = ConsolidatedItem(
-                document_id=document_id,
-                brand_code=best_item.brand_code,
-                part_number=best_item.part_number,
-                price_type=best_item.price_type,
-                price_value=convert_numpy_types(best_item.price_value),
-                currency=best_item.currency,
-                page=convert_numpy_types(page),
-                avg_confidence=float(sum((i.confidence or 0) for i in items) / len(items)),
-                source_count=len(items)
-            )
-            db.add(consolidated)
+            if items_with_price:
+                # Choose from items that have prices, by confidence
+                best_item = max(items_with_price, key=lambda x: x.confidence or 0)
+            else:
+                # No prices found, just use highest confidence
+                best_item = max(items, key=lambda x: x.confidence or 0)
+            
+            # Only include if we have meaningful data
+            if best_item.part_number:
+                consolidated = ConsolidatedItem(
+                    document_id=document_id,
+                    brand_code=best_item.brand_code,
+                    part_number=best_item.part_number,
+                    price_type=best_item.price_type,
+                    price_value=convert_numpy_types(best_item.price_value),
+                    currency=best_item.currency,
+                    page=convert_numpy_types(page),
+                    avg_confidence=float(sum((i.confidence or 0) for i in items) / len(items)),
+                    source_count=len(items)
+                )
+                db.add(consolidated)
         
         db.commit()
         logger.info(f"[CONSOLIDATE] Successfully consolidated {len(grouped)} unique items for document {document_id}")
