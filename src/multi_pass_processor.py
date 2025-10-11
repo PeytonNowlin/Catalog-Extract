@@ -125,6 +125,24 @@ class MultiPassProcessor:
             logger.info(f"[AUTO-MULTI-PASS] Document {document_id} - No low confidence pages found, skipping Pass 3")
         
         if progress_callback:
+            progress_callback(75, "Pass 3 complete, running plain text pass...")
+        
+        # PASS 4: Plain text extraction (catch any text-based content we might have missed)
+        logger.info(f"[AUTO-MULTI-PASS] Document {document_id} - Pass 4: Text Direct (final sweep for any text content)")
+        try:
+            pass4_options = options.copy()
+            pass4_options['force_ocr'] = False  # Disable OCR, text only
+            
+            pass4_id = await self._run_pass(
+                document_id, "text_direct", pdf_path, pass4_options, pass_number=4
+            )
+            pass_ids.append(pass4_id)
+            logger.info(f"[AUTO-MULTI-PASS] Document {document_id} - Pass 4 completed: Pass ID {pass4_id}")
+        except Exception as e:
+            logger.error(f"[AUTO-MULTI-PASS] Document {document_id} - Pass 4 failed: {e}", exc_info=True)
+            # Continue anyway with what we have
+        
+        if progress_callback:
             progress_callback(100, "All passes complete, consolidating...")
         
         logger.info(f"[AUTO-MULTI-PASS] Document {document_id} - Complete: {len(pass_ids)} passes created")

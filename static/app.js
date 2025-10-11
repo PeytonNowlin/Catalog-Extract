@@ -7,7 +7,7 @@ let pollInterval = null;
 
 // Method descriptions
 const METHOD_DESCRIPTIONS = {
-    'auto_multi_pass': '3 OCR passes: Standard (300 DPI), Aggressive (400 DPI), Plain (450 DPI on low-confidence pages)',
+    'auto_multi_pass': '4 passes: OCR Table (300), OCR Aggressive (400), OCR Plain (450), Text Direct (final sweep)',
     'text_direct': 'Fast extraction from text-based PDFs',
     'ocr_table': 'OCR with table detection - best for structured data',
     'ocr_plain': 'OCR without table detection - good for unstructured text',
@@ -144,32 +144,51 @@ function startPolling() {
 
 // Update pass status
 async function updatePassStatus() {
-    if (!currentPassId) return;
+    if (!currentDocumentId) return;
 
     try {
-        const response = await fetch(`${API_BASE}/api/passes/${currentPassId}`);
-        const pass = await response.json();
+        // Check document status to see all passes
+        const docResponse = await fetch(`${API_BASE}/api/documents/${currentDocumentId}`);
+        const doc = await docResponse.json();
 
         // Update progress
         const progressFill = document.getElementById('progressFill');
         const progressText = document.getElementById('progressText');
         const progressPercent = document.getElementById('progressPercent');
-        const progressPage = document.getElementById('progressPage');
 
-        progressFill.style.width = pass.progress + '%';
-        progressPercent.textContent = Math.round(pass.progress) + '%';
-        progressText.textContent = pass.status === 'processing' 
-            ? `Extracting data... (${pass.items_extracted} items found)`
-            : 'Processing...';
+        // Check all passes for the document
+        const allPasses = doc.passes || [];
+        const completedPasses = allPasses.filter(p => p.status === 'completed').length;
+        const failedPasses = allPasses.filter(p => p.status === 'failed').length;
+        const processingPasses = allPasses.filter(p => p.status === 'processing').length;
+        const totalPasses = allPasses.length;
+        
+        // Calculate overall progress
+        let totalItems = 0;
+        allPasses.forEach(p => {
+            totalItems += p.items_extracted || 0;
+        });
 
-        // Check if completed
-        if (pass.status === 'completed') {
+        // Update UI based on status
+        if (processingPasses > 0) {
+            // Still processing
+            const progress = totalPasses > 0 ? (completedPasses / totalPasses) * 100 : 0;
+            progressFill.style.width = progress + '%';
+            progressPercent.textContent = Math.round(progress) + '%';
+            progressText.textContent = `Pass ${completedPasses + 1}/${totalPasses} - ${totalItems} items found`;
+        } else if (completedPasses > 0 && processingPasses === 0 && failedPasses < totalPasses) {
+            // All passes completed successfully
+            progressFill.style.width = '100%';
+            progressPercent.textContent = '100%';
+            progressText.textContent = `Complete! ${totalItems} items extracted`;
+            
             clearInterval(pollInterval);
             await showResults(currentDocumentId);
             await loadRecentDocuments();
-        } else if (pass.status === 'failed') {
+        } else if (failedPasses === totalPasses) {
+            // All passes failed
             clearInterval(pollInterval);
-            progressText.textContent = 'Error: ' + (pass.error_message || 'Processing failed');
+            progressText.textContent = 'Error: All extraction passes failed';
             progressText.style.color = '#ef4444';
             await loadRecentDocuments();
         }
