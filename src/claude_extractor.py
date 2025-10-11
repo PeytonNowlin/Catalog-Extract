@@ -129,8 +129,6 @@ class ClaudeExtractor:
     
     def _image_to_base64(self, image) -> str:
         """Convert image (numpy array or PIL Image) to base64 string."""
-        import numpy as np
-        
         # Convert numpy array to PIL Image if needed
         if isinstance(image, np.ndarray):
             image = Image.fromarray(image)
