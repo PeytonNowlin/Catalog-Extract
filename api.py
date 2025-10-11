@@ -25,6 +25,8 @@ from src.extraction_strategies import StrategyFactory
 from src.validator import DataValidator
 from src.exporter import DataExporter
 from src.multi_pass_processor import MultiPassProcessor, convert_numpy_types
+import csv
+import io
 
 import logging
 logging.basicConfig(level=logging.INFO)
@@ -677,6 +679,83 @@ async def health_check(db: Session = Depends(get_db)):
         "passes": pass_count,
         "version": "2.0.0"
     }
+
+
+@app.post("/api/extract-raw-text")
+async def extract_raw_text(file: UploadFile = File(...)):
+    """
+    Extract raw text from PDF using PDFplumber - NO regex, NO database.
+    Returns CSV with all extracted text directly.
+    """
+    try:
+        # Save uploaded file temporarily
+        upload_path = UPLOAD_DIR / f"temp_raw_{int(time.time())}_{file.filename}"
+        with open(upload_path, "wb") as f:
+            content = await file.read()
+            f.write(content)
+        
+        logger.info(f"[RAW TEXT] Processing: {file.filename}")
+        
+        # Initialize PDF handler
+        pdf_handler = PDFHandler(str(upload_path))
+        
+        # Prepare CSV in memory
+        csv_buffer = io.StringIO()
+        csv_writer = csv.writer(csv_buffer)
+        csv_writer.writerow(['Page', 'Line_Number', 'Text', 'Character_Count'])
+        
+        total_lines = 0
+        total_chars = 0
+        
+        # Extract text from each page
+        for page_num in range(pdf_handler.page_count):
+            text = pdf_handler.extract_text_direct(page_num)
+            
+            if text:
+                # Split into lines
+                lines = text.split('\n')
+                for line_num, line in enumerate(lines, 1):
+                    line = line.strip()
+                    if line:  # Skip empty lines
+                        csv_writer.writerow([
+                            page_num + 1,  # 1-indexed for user display
+                            line_num,
+                            line,
+                            len(line)
+                        ])
+                        total_lines += 1
+                        total_chars += len(line)
+        
+        # Clean up temp file
+        upload_path.unlink(missing_ok=True)
+        
+        # Prepare response
+        csv_content = csv_buffer.getvalue()
+        csv_buffer.close()
+        
+        # Create output filename
+        output_filename = f"raw_text_{Path(file.filename).stem}_{int(time.time())}.csv"
+        
+        logger.info(f"[RAW TEXT] Extracted {total_lines} lines ({total_chars} chars) from {file.filename}")
+        
+        # Return CSV as downloadable file
+        from fastapi.responses import Response
+        return Response(
+            content=csv_content,
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": f"attachment; filename={output_filename}",
+                "X-Total-Lines": str(total_lines),
+                "X-Total-Characters": str(total_chars),
+                "X-Pages": str(pdf_handler.page_count)
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"[RAW TEXT] Error: {e}", exc_info=True)
+        if upload_path.exists():
+            upload_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # Mount static files

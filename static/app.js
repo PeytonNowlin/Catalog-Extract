@@ -90,7 +90,47 @@ async function uploadFile(file) {
     const formData = new FormData();
     formData.append('file', file);
 
-    // Get options
+    // Check for raw text mode
+    const rawTextMode = document.getElementById('rawTextMode').checked;
+    
+    if (rawTextMode) {
+        // Raw text extraction - direct CSV download
+        try {
+            const response = await fetch(`${API_BASE}/api/extract-raw-text`, {
+                method: 'POST',
+                body: formData
+            });
+
+            if (!response.ok) {
+                throw new Error('Raw text extraction failed');
+            }
+
+            // Get stats from headers
+            const totalLines = response.headers.get('X-Total-Lines');
+            const totalChars = response.headers.get('X-Total-Characters');
+            const pages = response.headers.get('X-Pages');
+
+            // Download CSV
+            const blob = await response.blob();
+            const downloadUrl = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = downloadUrl;
+            a.download = `raw_text_${file.name.replace('.pdf', '')}_${Date.now()}.csv`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            window.URL.revokeObjectURL(downloadUrl);
+
+            alert(`✅ Raw text extracted!\n\n📄 ${pages} pages\n📝 ${totalLines} lines\n🔤 ${totalChars} characters\n\nCSV downloaded successfully!`);
+
+        } catch (error) {
+            console.error('Raw text extraction error:', error);
+            alert('❌ Error extracting raw text: ' + error.message);
+        }
+        return;
+    }
+
+    // Normal extraction (with DB)
     const method = document.getElementById('extractionMethod').value;
     const startPage = document.getElementById('startPage').value || 0;
     const endPage = document.getElementById('endPage').value;
