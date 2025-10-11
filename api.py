@@ -113,10 +113,12 @@ async def process_extraction_pass(
 ):
     """Background task to process an extraction pass."""
     db = next(get_db())
+    extraction_pass = None
     
     try:
         # Check if auto multi-pass mode
         if options.method == "auto_multi_pass":
+            logger.info(f"Starting auto multi-pass for document {document_id}")
             processor = MultiPassProcessor(db)
             
             # Run auto multi-pass
@@ -128,6 +130,7 @@ async def process_extraction_pass(
             )
             
             # Consolidate results
+            logger.info(f"Consolidating results for document {document_id}")
             consolidate_document_items(document_id, db)
             
             logger.info(f"Auto multi-pass complete for document {document_id}: {len(pass_ids)} passes")
@@ -137,6 +140,7 @@ async def process_extraction_pass(
         # Get pass from database
         extraction_pass = db.query(ExtractionPass).filter(ExtractionPass.id == pass_id).first()
         if not extraction_pass:
+            logger.error(f"Extraction pass {pass_id} not found")
             return
         
         # Update status
