@@ -24,6 +24,7 @@ from src.pdf_handler import PDFHandler
 from src.extraction_strategies import StrategyFactory
 from src.validator import DataValidator
 from src.exporter import DataExporter
+from src.multi_pass_processor import MultiPassProcessor
 
 import logging
 logging.basicConfig(level=logging.INFO)
@@ -114,6 +115,25 @@ async def process_extraction_pass(
     db = next(get_db())
     
     try:
+        # Check if auto multi-pass mode
+        if options.method == "auto_multi_pass":
+            processor = MultiPassProcessor(db)
+            
+            # Run auto multi-pass
+            pass_ids = await processor.process_auto_multi_pass(
+                document_id,
+                pdf_path,
+                options.dict(),
+                progress_callback=None
+            )
+            
+            # Consolidate results
+            consolidate_document_items(document_id, db)
+            
+            logger.info(f"Auto multi-pass complete for document {document_id}: {len(pass_ids)} passes")
+            return
+        
+        # Single pass mode (original logic)
         # Get pass from database
         extraction_pass = db.query(ExtractionPass).filter(ExtractionPass.id == pass_id).first()
         if not extraction_pass:
@@ -576,6 +596,11 @@ async def get_available_methods():
     """Get list of available extraction methods."""
     return {
         "methods": [
+            {
+                "id": "auto_multi_pass",
+                "name": "Auto Multi-Pass",
+                "description": "Automatically runs 2-3 methods and merges best results (recommended)"
+            },
             {
                 "id": "text_direct",
                 "name": "Text Direct",

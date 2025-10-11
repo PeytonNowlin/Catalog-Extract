@@ -7,6 +7,7 @@ let pollInterval = null;
 
 // Method descriptions
 const METHOD_DESCRIPTIONS = {
+    'auto_multi_pass': 'Automatic multi-pass: runs 2-3 methods and merges best results',
     'text_direct': 'Fast extraction from text-based PDFs',
     'ocr_table': 'OCR with table detection - best for structured data',
     'ocr_plain': 'OCR without table detection - good for unstructured text',

@@ -63,13 +63,14 @@
                             <div class="form-group">
                                 <label for="extractionMethod">Extraction Method</label>
                                 <select id="extractionMethod" class="method-select">
-                                    <option value="ocr_table">OCR + Tables (Recommended)</option>
+                                    <option value="auto_multi_pass">🔄 Auto Multi-Pass (Recommended)</option>
+                                    <option value="ocr_table">OCR + Tables</option>
                                     <option value="text_direct">Text Direct (Fast)</option>
                                     <option value="ocr_plain">OCR Plain Text</option>
                                     <option value="ocr_aggressive">OCR Aggressive (Thorough)</option>
                                     <option value="hybrid">Hybrid (All Methods)</option>
                                 </select>
-                                <small class="help-text" id="methodDescription">OCR with table detection - best for structured data</small>
+                                <small class="help-text" id="methodDescription">Automatic multi-pass: runs 2-3 methods and merges best results</small>
                             </div>
 
                             <div class="options-grid">
