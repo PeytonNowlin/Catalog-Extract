@@ -9,7 +9,7 @@ let pollInterval = null;
 const METHOD_DESCRIPTIONS = {
     'auto_multi_pass': 'AI-powered 2-pass: Claude Vision (standard) → Enhanced prompt (low-confidence pages). Cost: ~$0.02-0.05/page',
     'claude_vision': 'Single-pass Claude AI Vision extraction. Most accurate, cost: ~$0.015-0.03/page',
-    'text_direct': 'Fast extraction from text-based PDFs (free)',
+    'text_direct': 'PDFplumber text extraction (NO OCR) - for native PDF text only (free, fast)',
     'ocr_table': 'OCR with table detection - best for structured catalog data (free)',
     'ocr_plain': 'OCR without table detection - for unstructured text (free)',
     'ocr_aggressive': 'High-DPI OCR with aggressive preprocessing - for poor quality scans (free)',
