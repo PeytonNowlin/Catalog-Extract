@@ -24,7 +24,7 @@ from src.pdf_handler import PDFHandler
 from src.extraction_strategies import StrategyFactory
 from src.validator import DataValidator
 from src.exporter import DataExporter
-from src.multi_pass_processor import MultiPassProcessor
+from src.multi_pass_processor import MultiPassProcessor, convert_numpy_types
 
 import logging
 logging.basicConfig(level=logging.INFO)
@@ -183,15 +183,15 @@ async def process_extraction_pass(
                         brand_code=item.brand_code,
                         part_number=item.part_number,
                         price_type=item.price_type,
-                        price_value=item.price_value,
+                        price_value=convert_numpy_types(item.price_value),
                         currency=item.currency,
-                        page=item.page,
-                        confidence=item.confidence,
+                        page=convert_numpy_types(item.page),
+                        confidence=convert_numpy_types(item.confidence),
                         raw_text=item.raw_text,
-                        bbox_x=item.bbox[0] if item.bbox else None,
-                        bbox_y=item.bbox[1] if item.bbox else None,
-                        bbox_width=item.bbox[2] if item.bbox else None,
-                        bbox_height=item.bbox[3] if item.bbox else None,
+                        bbox_x=convert_numpy_types(item.bbox[0]) if item.bbox else None,
+                        bbox_y=convert_numpy_types(item.bbox[1]) if item.bbox else None,
+                        bbox_width=convert_numpy_types(item.bbox[2]) if item.bbox else None,
+                        bbox_height=convert_numpy_types(item.bbox[3]) if item.bbox else None,
                         extraction_method=ExtractionMethod(options.method)
                     )
                     db.add(db_item)
