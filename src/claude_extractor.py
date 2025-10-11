@@ -7,6 +7,7 @@ import base64
 import json
 import io
 import os
+import numpy as np
 from typing import List, Dict, Optional
 from dataclasses import dataclass
 from anthropic import Anthropic
@@ -126,8 +127,14 @@ class ClaudeExtractor:
             logger.error(f"Claude extraction failed for page {page_num}: {e}", exc_info=True)
             return [], 0.0
     
-    def _image_to_base64(self, image: Image.Image) -> str:
-        """Convert PIL Image to base64 string."""
+    def _image_to_base64(self, image) -> str:
+        """Convert image (numpy array or PIL Image) to base64 string."""
+        import numpy as np
+        
+        # Convert numpy array to PIL Image if needed
+        if isinstance(image, np.ndarray):
+            image = Image.fromarray(image)
+        
         buffered = io.BytesIO()
         # Convert to RGB if needed (remove alpha channel)
         if image.mode in ('RGBA', 'LA', 'P'):
