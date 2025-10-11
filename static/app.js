@@ -36,14 +36,22 @@ function setupMethodSelector() {
 function setupFileUpload() {
     const fileInput = document.getElementById('fileInput');
     const uploadBox = document.getElementById('uploadBox');
+    let isUploading = false;
 
-    uploadBox.addEventListener('click', () => {
-        fileInput.click();
+    uploadBox.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (!isUploading) {
+            fileInput.click();
+        }
     });
 
     fileInput.addEventListener('change', (e) => {
-        if (e.target.files.length > 0) {
-            uploadFile(e.target.files[0]);
+        if (e.target.files.length > 0 && !isUploading) {
+            isUploading = true;
+            uploadFile(e.target.files[0]).finally(() => {
+                isUploading = false;
+                fileInput.value = ''; // Reset input
+            });
         }
     });
 
@@ -59,12 +67,16 @@ function setupFileUpload() {
 
     uploadBox.addEventListener('drop', (e) => {
         e.preventDefault();
+        e.stopPropagation();
         uploadBox.classList.remove('dragover');
         
-        if (e.dataTransfer.files.length > 0) {
+        if (e.dataTransfer.files.length > 0 && !isUploading) {
             const file = e.dataTransfer.files[0];
             if (file.type === 'application/pdf') {
-                uploadFile(file);
+                isUploading = true;
+                uploadFile(file).finally(() => {
+                    isUploading = false;
+                });
             } else {
                 alert('Please upload a PDF file');
             }

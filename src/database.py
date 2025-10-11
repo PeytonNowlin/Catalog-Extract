@@ -30,6 +30,7 @@ class ExtractionStatus(enum.Enum):
 
 class ExtractionMethod(enum.Enum):
     """Extraction method used."""
+    AUTO_MULTI_PASS = "auto_multi_pass"
     TEXT_DIRECT = "text_direct"
     OCR_TABLE = "ocr_table"
     OCR_PLAIN = "ocr_plain"
