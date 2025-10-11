@@ -31,12 +31,13 @@ class DataExtractor:
     
     # Regex patterns for different data types
     PATTERNS = {
-        # Part numbers: various formats
+        # Part numbers: specific catalog formats only
         'part_number': [
-            r'\b([A-Z]{2,4}[-\s]?\d{3,8}[-\s]?[A-Z0-9]{0,4})\b',  # ABC-12345-XX
-            r'\b(\d{3,4}[-\s]\d{3,4}[-\s]?[A-Z0-9]{0,4})\b',      # 123-4567-XX
-            r'\b([A-Z]+\d{4,8})\b',                                 # ABC12345
-            r'\b(\d{6,10})\b',                                      # 123456789
+            r'\b(\d{2}[-]\d{4}[A-Z]{0,4})\b',                      # 41-3525, 28-9313PT, 11-1413P6
+            r'\b(\d{2}[A-Z][-]?\d{4})\b',                          # 43D7276, 36U-9332
+            r'\b([A-Z]{2,4}[-]\d{4,6}[-]?[A-Z0-9]{0,4})\b',       # ABC-12345, SUM-715030
+            r'\b([A-Z]{3}\d{4,6})\b',                              # SUM715030, EXG1181
+            r'\b(\d{2}[-]\d{3,4}[A-Z])\b',                         # 45-517A, 45-417A
         ],
         
         # Prices: $X.XX, $X,XXX.XX, etc.
