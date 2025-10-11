@@ -7,6 +7,8 @@ import numpy as np
 import pytesseract
 from typing import List, Dict, Tuple, Optional
 import logging
+import os
+import platform
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -51,6 +53,10 @@ class OCRHandler:
     
     def _verify_tesseract(self):
         """Verify that Tesseract is installed and accessible."""
+        # Auto-detect Tesseract on Windows
+        if platform.system() == 'Windows':
+            self._setup_windows_tesseract()
+        
         try:
             version = pytesseract.get_tesseract_version()
             logger.info(f"Tesseract version: {version}")
@@ -62,6 +68,43 @@ class OCRHandler:
                 "Linux: sudo apt-get install tesseract-ocr\n"
                 "Mac: brew install tesseract"
             )
+    
+    def _setup_windows_tesseract(self):
+        """Auto-detect Tesseract installation on Windows."""
+        possible_paths = [
+            r'C:\Program Files\Tesseract-OCR\tesseract.exe',
+            r'C:\Program Files (x86)\Tesseract-OCR\tesseract.exe',
+            r'C:\Tesseract-OCR\tesseract.exe',
+            r'C:\ProgramData\chocolatey\bin\tesseract.exe',
+            r'C:\ProgramData\chocolatey\lib\tesseract\tools\tesseract.exe',
+        ]
+        
+        # Check if already configured
+        current_path = getattr(pytesseract.pytesseract, 'tesseract_cmd', None)
+        if current_path and os.path.exists(current_path):
+            logger.info(f"Using configured Tesseract path: {current_path}")
+            return
+        
+        # Try to find Tesseract
+        for path in possible_paths:
+            if os.path.exists(path):
+                pytesseract.pytesseract.tesseract_cmd = path
+                logger.info(f"Found Tesseract at: {path}")
+                return
+        
+        # Try to find in Chocolatey lib directory (version-specific)
+        choco_lib = r'C:\ProgramData\chocolatey\lib'
+        if os.path.exists(choco_lib):
+            for item in os.listdir(choco_lib):
+                if item.startswith('tesseract'):
+                    tesseract_dir = os.path.join(choco_lib, item, 'tools')
+                    tesseract_exe = os.path.join(tesseract_dir, 'tesseract.exe')
+                    if os.path.exists(tesseract_exe):
+                        pytesseract.pytesseract.tesseract_cmd = tesseract_exe
+                        logger.info(f"Found Tesseract at: {tesseract_exe}")
+                        return
+        
+        logger.warning("Could not auto-detect Tesseract location on Windows")
     
     def extract_text(self, image: np.ndarray, page_num: int = 0) -> Tuple[str, List[OCRWord], List[OCRLine]]:
         """
