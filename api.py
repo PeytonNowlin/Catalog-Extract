@@ -238,58 +238,73 @@ async def process_extraction_pass(
 
 def consolidate_document_items(document_id: int, db: Session):
     """Consolidate items from all passes for a document."""
-    logger.info(f"Consolidating items for document {document_id}")
-    
-    # Get all completed passes
-    passes = db.query(ExtractionPass).filter(
-        ExtractionPass.document_id == document_id,
+    try:
+        logger.info(f"[CONSOLIDATE] Starting consolidation for document {document_id}")
+        
+        # Get all completed passes
+        passes = db.query(ExtractionPass).filter(
+            ExtractionPass.document_id == document_id,
         ExtractionPass.status == ExtractionStatus.COMPLETED
     ).all()
     
-    if not passes:
-        return
-    
-    # Get all items from all passes
-    all_items = []
-    for pass_obj in passes:
-        items = db.query(ExtractedItem).filter(
-            ExtractedItem.extraction_pass_id == pass_obj.id
-        ).all()
-        all_items.extend(items)
-    
-    # Group by (part_number, page)
-    grouped = {}
-    for item in all_items:
-        key = (item.part_number, item.page)
-        if key not in grouped:
-            grouped[key] = []
-        grouped[key].append(item)
-    
-    # Clear old consolidated items
-    db.query(ConsolidatedItem).filter(
-        ConsolidatedItem.document_id == document_id
-    ).delete()
-    
-    # Create consolidated items (best from each group)
-    for (part_number, page), items in grouped.items():
-        # Choose item with highest confidence
-        best_item = max(items, key=lambda x: x.confidence)
+        if not passes:
+            logger.info(f"[CONSOLIDATE] No completed passes found for document {document_id}")
+            return
         
-        consolidated = ConsolidatedItem(
-            document_id=document_id,
-            brand_code=best_item.brand_code,
-            part_number=best_item.part_number,
-            price_type=best_item.price_type,
-            price_value=best_item.price_value,
-            currency=best_item.currency,
-            page=page,
-            avg_confidence=sum(i.confidence for i in items) / len(items),
-            source_count=len(items)
-        )
-        db.add(consolidated)
-    
-    db.commit()
-    logger.info(f"Consolidated {len(grouped)} unique items for document {document_id}")
+        logger.info(f"[CONSOLIDATE] Found {len(passes)} completed passes for document {document_id}")
+        
+        # Get all items from all passes
+        all_items = []
+        for pass_obj in passes:
+            items = db.query(ExtractedItem).filter(
+                ExtractedItem.extraction_pass_id == pass_obj.id
+            ).all()
+            all_items.extend(items)
+            logger.info(f"[CONSOLIDATE] Pass {pass_obj.id} ({pass_obj.method.value}): {len(items)} items")
+        
+        logger.info(f"[CONSOLIDATE] Total items to consolidate: {len(all_items)}")
+        
+        # Group by (part_number, page)
+        grouped = {}
+        for item in all_items:
+            key = (item.part_number, item.page)
+            if key not in grouped:
+                grouped[key] = []
+            grouped[key].append(item)
+        
+        logger.info(f"[CONSOLIDATE] Grouped into {len(grouped)} unique items")
+        
+        # Clear old consolidated items
+        deleted_count = db.query(ConsolidatedItem).filter(
+            ConsolidatedItem.document_id == document_id
+        ).delete()
+        logger.info(f"[CONSOLIDATE] Deleted {deleted_count} old consolidated items")
+        
+        # Create consolidated items (best from each group)
+        for (part_number, page), items in grouped.items():
+            # Choose item with highest confidence
+            best_item = max(items, key=lambda x: x.confidence or 0)
+            
+            consolidated = ConsolidatedItem(
+                document_id=document_id,
+                brand_code=best_item.brand_code,
+                part_number=best_item.part_number,
+                price_type=best_item.price_type,
+                price_value=best_item.price_value,
+                currency=best_item.currency,
+                page=page,
+                avg_confidence=sum((i.confidence or 0) for i in items) / len(items),
+                source_count=len(items)
+            )
+            db.add(consolidated)
+        
+        db.commit()
+        logger.info(f"[CONSOLIDATE] Successfully consolidated {len(grouped)} unique items for document {document_id}")
+        
+    except Exception as e:
+        logger.error(f"[CONSOLIDATE] Failed for document {document_id}: {e}", exc_info=True)
+        db.rollback()
+        raise
 
 
 # API Endpoints

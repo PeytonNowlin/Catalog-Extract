@@ -33,7 +33,7 @@ class MultiPassProcessor:
         
         Returns list of pass IDs created.
         """
-        logger.info(f"Starting auto multi-pass for document {document_id}")
+        logger.info(f"[AUTO-MULTI-PASS] Starting for document {document_id}")
         
         doc = self.db.query(Document).filter(Document.id == document_id).first()
         if not doc:
@@ -43,11 +43,16 @@ class MultiPassProcessor:
         pass_ids = []
         
         # PASS 1: Try text extraction first (fastest)
-        logger.info("Pass 1: Text Direct (fast check)")
-        pass1_id = await self._run_pass(
-            document_id, "text_direct", pdf_path, options, pass_number=1
-        )
-        pass_ids.append(pass1_id)
+        logger.info(f"[AUTO-MULTI-PASS] Document {document_id} - Pass 1: Text Direct (fast check)")
+        try:
+            pass1_id = await self._run_pass(
+                document_id, "text_direct", pdf_path, options, pass_number=1
+            )
+            pass_ids.append(pass1_id)
+            logger.info(f"[AUTO-MULTI-PASS] Document {document_id} - Pass 1 completed: Pass ID {pass1_id}")
+        except Exception as e:
+            logger.error(f"[AUTO-MULTI-PASS] Document {document_id} - Pass 1 failed: {e}", exc_info=True)
+            raise
         
         if progress_callback:
             progress_callback(33, "Pass 1 complete, analyzing results...")
@@ -59,11 +64,17 @@ class MultiPassProcessor:
         if pass1_stats['avg_confidence'] < self.low_confidence_threshold or \
            pass1_stats['items_per_page'] < self.min_items_per_page:
             
-            logger.info("Pass 2: OCR + Tables (structured extraction)")
-            pass2_id = await self._run_pass(
-                document_id, "ocr_table", pdf_path, options, pass_number=2
-            )
-            pass_ids.append(pass2_id)
+            logger.info(f"[AUTO-MULTI-PASS] Document {document_id} - Pass 2: OCR + Tables (structured extraction)")
+            logger.info(f"[AUTO-MULTI-PASS] Pass 1 stats: {pass1_stats}")
+            try:
+                pass2_id = await self._run_pass(
+                    document_id, "ocr_table", pdf_path, options, pass_number=2
+                )
+                pass_ids.append(pass2_id)
+                logger.info(f"[AUTO-MULTI-PASS] Document {document_id} - Pass 2 completed: Pass ID {pass2_id}")
+            except Exception as e:
+                logger.error(f"[AUTO-MULTI-PASS] Document {document_id} - Pass 2 failed: {e}", exc_info=True)
+                # Continue anyway with what we have
             
             if progress_callback:
                 progress_callback(66, "Pass 2 complete, checking for gaps...")
@@ -75,24 +86,30 @@ class MultiPassProcessor:
             low_confidence_pages = self._find_low_confidence_pages(document_id)
             
             if low_confidence_pages and len(low_confidence_pages) > 0:
-                logger.info(f"Pass 3: OCR Aggressive on {len(low_confidence_pages)} pages")
+                logger.info(f"[AUTO-MULTI-PASS] Document {document_id} - Pass 3: OCR Aggressive on {len(low_confidence_pages)} pages")
                 
-                # Create targeted pass for specific pages
-                pass3_options = options.copy()
-                pass3_options['target_pages'] = low_confidence_pages
-                
-                pass3_id = await self._run_pass(
-                    document_id, "ocr_aggressive", pdf_path, pass3_options, 
-                    pass_number=3, target_pages=low_confidence_pages
-                )
-                pass_ids.append(pass3_id)
+                try:
+                    # Create targeted pass for specific pages
+                    pass3_options = options.copy()
+                    pass3_options['target_pages'] = low_confidence_pages
+                    
+                    pass3_id = await self._run_pass(
+                        document_id, "ocr_aggressive", pdf_path, pass3_options, 
+                        pass_number=3, target_pages=low_confidence_pages
+                    )
+                    pass_ids.append(pass3_id)
+                    logger.info(f"[AUTO-MULTI-PASS] Document {document_id} - Pass 3 completed: Pass ID {pass3_id}")
+                except Exception as e:
+                    logger.error(f"[AUTO-MULTI-PASS] Document {document_id} - Pass 3 failed: {e}", exc_info=True)
+                    # Continue anyway with what we have
         else:
-            logger.info("Pass 1 yielded good results, skipping additional passes")
+            logger.info(f"[AUTO-MULTI-PASS] Document {document_id} - Pass 1 yielded good results, skipping additional passes")
+            logger.info(f"[AUTO-MULTI-PASS] Pass 1 stats: {pass1_stats}")
         
         if progress_callback:
             progress_callback(100, "All passes complete, consolidating...")
         
-        logger.info(f"Auto multi-pass complete: {len(pass_ids)} passes")
+        logger.info(f"[AUTO-MULTI-PASS] Document {document_id} - Complete: {len(pass_ids)} passes created")
         return pass_ids
     
     async def _run_pass(
