@@ -8,12 +8,12 @@ from api import app
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("🚀 Catalog Extractor - Starting Server")
+    print("Catalog Extractor - Starting Server")
     print("=" * 60)
     print()
-    print("📱 Web UI:       http://localhost:8000")
-    print("📚 API Docs:     http://localhost:8000/docs")
-    print("🔧 Health Check: http://localhost:8000/api/health")
+    print("Web UI:       http://localhost:8000")
+    print("API Docs:     http://localhost:8000/docs")
+    print("Health Check: http://localhost:8000/api/health")
     print()
     print("Press CTRL+C to stop the server")
     print("=" * 60)
