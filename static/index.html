@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Catalog Extractor</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📄 Catalog Extractor</h1>
+            <p class="subtitle">Extract part numbers and prices from PDF catalogs using OCR</p>
+        </header>
+
+        <div class="upload-section">
+            <div class="upload-box" id="uploadBox">
+                <input type="file" id="fileInput" accept=".pdf" hidden>
+                <div class="upload-content">
+                    <div class="upload-icon">📤</div>
+                    <h3>Upload PDF Catalog</h3>
+                    <p>Click to select or drag and drop a PDF file</p>
+                    <button class="btn btn-primary" onclick="document.getElementById('fileInput').click()">
+                        Select File
+                    </button>
+                </div>
+            </div>
+
+            <div class="options-section">
+                <h3>Extraction Options</h3>
+                <div class="options-grid">
+                    <div class="option">
+                        <label for="startPage">Start Page (0-indexed)</label>
+                        <input type="number" id="startPage" value="0" min="0">
+                    </div>
+                    <div class="option">
+                        <label for="endPage">End Page (leave empty for all)</label>
+                        <input type="number" id="endPage" placeholder="All pages" min="1">
+                    </div>
+                    <div class="option">
+                        <label for="dpi">DPI (Resolution)</label>
+                        <input type="number" id="dpi" value="300" min="72" max="600">
+                    </div>
+                    <div class="option">
+                        <label for="minConfidence">Min Confidence (%)</label>
+                        <input type="number" id="minConfidence" value="50" min="0" max="100">
+                    </div>
+                </div>
+                <div class="checkboxes">
+                    <label>
+                        <input type="checkbox" id="forceOcr">
+                        Force OCR (even for text-based PDFs)
+                    </label>
+                    <label>
+                        <input type="checkbox" id="debugMode">
+                        Debug Mode (save intermediate images)
+                    </label>
+                </div>
+            </div>
+        </div>
+
+        <div id="processingSection" class="processing-section" style="display: none;">
+            <h3>Processing...</h3>
+            <div class="progress-bar">
+                <div class="progress-fill" id="progressFill"></div>
+            </div>
+            <p class="progress-text" id="progressText">Starting...</p>
+        </div>
+
+        <div id="resultsSection" class="results-section" style="display: none;">
+            <div class="results-header">
+                <h3>Extraction Results</h3>
+                <div class="results-actions">
+                    <button class="btn btn-success" id="downloadCsvBtn">
+                        📥 Download CSV
+                    </button>
+                    <button class="btn btn-secondary" id="downloadSummaryBtn">
+                        📊 Download Summary
+                    </button>
+                </div>
+            </div>
+
+            <div class="stats-grid" id="statsGrid"></div>
+
+            <div class="table-container">
+                <table id="resultsTable">
+                    <thead>
+                        <tr>
+                            <th>Brand Code</th>
+                            <th>Part Number</th>
+                            <th>Price Type</th>
+                            <th>Price</th>
+                            <th>Currency</th>
+                            <th>Page</th>
+                            <th>Confidence</th>
+                        </tr>
+                    </thead>
+                    <tbody id="resultsTableBody"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <div id="jobsSection" class="jobs-section">
+            <h3>Recent Jobs</h3>
+            <div id="jobsList"></div>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
+
