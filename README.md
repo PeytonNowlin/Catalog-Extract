@@ -367,6 +367,34 @@ python catalog_extractor.py catalog.pdf --start-page 20 --end-page 30
 - **Memory usage**: ~200-500 MB per page at 300 DPI
 
 
+## Development Tools
+
+### Database Clear Script
+
+For development, use the database clear script to remove bad data:
+
+**Interactive menu:**
+```bash
+python clear_db.py
+```
+
+**Quick clear (data only):**
+```bash
+python clear_db.py --data
+```
+
+**Windows shortcut:**
+```bash
+clear_db.bat
+```
+
+**Options:**
+- `--data` - Clear database data only (keep schema)
+- `--reset` - Reset database schema (drop & recreate tables)
+- `--uploads` - Clear uploaded files
+- `--outputs` - Clear output files
+- `--all` - Clear everything (database + files)
+
 
 ## Contributing
 
