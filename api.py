@@ -291,10 +291,10 @@ def consolidate_document_items(document_id: int, db: Session):
                 brand_code=best_item.brand_code,
                 part_number=best_item.part_number,
                 price_type=best_item.price_type,
-                price_value=best_item.price_value,
+                price_value=convert_numpy_types(best_item.price_value),
                 currency=best_item.currency,
-                page=page,
-                avg_confidence=sum((i.confidence or 0) for i in items) / len(items),
+                page=convert_numpy_types(page),
+                avg_confidence=float(sum((i.confidence or 0) for i in items) / len(items)),
                 source_count=len(items)
             )
             db.add(consolidated)
