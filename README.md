@@ -105,7 +105,7 @@ DELETE /api/jobs/{job_id}
 
 Extract from entire catalog:
 ```bash
-python catalog_extractor.py SummitRacingCatalog.pdf
+python catalog_extractor.py your_catalog.pdf
 ```
 
 ### Advanced Options

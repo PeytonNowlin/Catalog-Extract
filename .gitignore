@@ -31,4 +31,5 @@ Thumbs.db
 
 # Test files
 test_*.pdf
+*.pdf
 
