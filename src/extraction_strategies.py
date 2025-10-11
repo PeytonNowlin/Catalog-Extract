@@ -189,6 +189,33 @@ class OCRAggressiveStrategy(ExtractionStrategy):
         return "ocr_aggressive"
 
 
+class ClaudeVisionStrategy(ExtractionStrategy):
+    """Uses Claude Vision API for intelligent extraction."""
+    
+    def __init__(self):
+        self.claude = ClaudeExtractor()
+        self.total_cost = 0.0
+    
+    def extract(
+        self,
+        pdf_handler: PDFHandler,
+        page_num: int,
+        options: Dict[str, Any]
+    ) -> List[ExtractedItem]:
+        """Extract using Claude Vision API."""
+        items, cost = self.claude.extract_from_page(pdf_handler, page_num, options)
+        self.total_cost += cost
+        logger.info(f"Claude Vision extracted {len(items)} items from page {page_num} (cost: ${cost:.4f})")
+        return items
+    
+    def get_method_name(self) -> str:
+        return "claude_vision"
+    
+    def get_cost(self) -> float:
+        """Get total API cost for this strategy instance."""
+        return self.total_cost
+
+
 class HybridStrategy(ExtractionStrategy):
     """Combine multiple strategies."""
     
@@ -243,6 +270,7 @@ class StrategyFactory:
     def create(method: str, debug_mode: bool = False) -> ExtractionStrategy:
         """Create a strategy by method name."""
         strategies = {
+            'claude_vision': ClaudeVisionStrategy,
             'text_direct': TextDirectStrategy,
             'ocr_table': lambda: OCRTableStrategy(debug_mode),
             'ocr_plain': lambda: OCRPlainStrategy(debug_mode),

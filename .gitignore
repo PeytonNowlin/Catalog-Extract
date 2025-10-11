@@ -33,3 +33,9 @@ Thumbs.db
 test_*.pdf
 *.pdf
 
+# Environment variables
+.env
+*.env
+.env.local
+.env.*.local
+

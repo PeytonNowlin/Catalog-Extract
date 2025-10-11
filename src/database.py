@@ -31,6 +31,7 @@ class ExtractionStatus(enum.Enum):
 class ExtractionMethod(enum.Enum):
     """Extraction method used."""
     AUTO_MULTI_PASS = "auto_multi_pass"
+    CLAUDE_VISION = "claude_vision"
     TEXT_DIRECT = "text_direct"
     OCR_TABLE = "ocr_table"
     OCR_PLAIN = "ocr_plain"
@@ -75,6 +76,7 @@ class ExtractionPass(Base):
     items_extracted = Column(Integer, default=0)
     avg_confidence = Column(Float, nullable=True)
     processing_time = Column(Float, nullable=True)  # seconds
+    api_cost = Column(Float, nullable=True)  # USD cost for API-based methods
     
     # Metadata
     created_at = Column(DateTime, default=datetime.utcnow)

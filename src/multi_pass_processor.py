@@ -57,77 +57,58 @@ class MultiPassProcessor:
         pass_ids = []
         base_dpi = options.get('dpi', 300)
         
-        # PASS 1: Text Direct - Try native PDF text first (fastest, most accurate if available)
-        logger.info(f"[AUTO-MULTI-PASS] Document {document_id} - Pass 1: Text Direct (native PDF text extraction)")
+        # PASS 1: Claude Vision - AI-powered extraction (main pass)
+        logger.info(f"[AUTO-MULTI-PASS] Document {document_id} - Pass 1: Claude Vision (AI extraction)")
         try:
             pass1_options = options.copy()
-            pass1_options['force_ocr'] = False
             pass1_options['dpi'] = base_dpi
+            pass1_options['enhanced_prompt'] = False
             
             pass1_id = await self._run_pass(
-                document_id, "text_direct", pdf_path, pass1_options, pass_number=1
+                document_id, "claude_vision", pdf_path, pass1_options, pass_number=1
             )
             pass_ids.append(pass1_id)
             logger.info(f"[AUTO-MULTI-PASS] Document {document_id} - Pass 1 completed: Pass ID {pass1_id}")
         except Exception as e:
             logger.error(f"[AUTO-MULTI-PASS] Document {document_id} - Pass 1 failed: {e}", exc_info=True)
-            # Continue to OCR passes
+            raise  # Critical failure
         
         if progress_callback:
-            progress_callback(25, "Pass 1 complete, starting OCR passes...")
+            progress_callback(50, "Pass 1 complete, analyzing results...")
         
         # Analyze Pass 1 results
-        pass1_stats = self._analyze_pass_results(pass1_id) if pass1_id else {'avg_confidence': 0, 'items_per_page': 0, 'total_items': 0}
+        pass1_stats = self._analyze_pass_results(pass1_id)
         logger.info(f"[AUTO-MULTI-PASS] Pass 1 stats: {pass1_stats}")
         
-        # PASS 2: OCR + Tables at optimal DPI (300 DPI is usually best for catalogs)
-        logger.info(f"[AUTO-MULTI-PASS] Document {document_id} - Pass 2: OCR + Tables (DPI: {base_dpi}, optimized for catalog structure)")
-        try:
-            pass2_options = options.copy()
-            pass2_options['dpi'] = base_dpi  # Standard catalog DPI
-            pass2_options['force_ocr'] = True
-            pass2_options['min_confidence'] = 50.0  # Reasonable threshold
-            
-            pass2_id = await self._run_pass(
-                document_id, "ocr_table", pdf_path, pass2_options, pass_number=2
-            )
-            pass_ids.append(pass2_id)
-            logger.info(f"[AUTO-MULTI-PASS] Document {document_id} - Pass 2 completed: Pass ID {pass2_id}")
-        except Exception as e:
-            logger.error(f"[AUTO-MULTI-PASS] Document {document_id} - Pass 2 failed: {e}", exc_info=True)
-            raise  # This is critical, fail if OCR doesn't work
-        
-        if progress_callback:
-            progress_callback(50, "Pass 2 complete, analyzing...")
-        
-        # Analyze Pass 2 results
-        pass2_stats = self._analyze_pass_results(pass2_id)
-        logger.info(f"[AUTO-MULTI-PASS] Pass 2 stats: {pass2_stats}")
-        
-        # PASS 3: Targeted re-scan with enhanced preprocessing for low-confidence pages
+        # PASS 2: Claude Vision with enhanced prompt for low-confidence pages
         low_confidence_pages = self._find_low_confidence_pages(document_id)
         
         if low_confidence_pages and len(low_confidence_pages) > 0:
-            logger.info(f"[AUTO-MULTI-PASS] Document {document_id} - Pass 3: Enhanced OCR on {len(low_confidence_pages)} low-confidence pages")
+            logger.info(
+                f"[AUTO-MULTI-PASS] Document {document_id} - Pass 2: "
+                f"Claude Vision enhanced on {len(low_confidence_pages)} low-confidence pages"
+            )
             
             try:
-                # Same method, but target specific problematic pages
-                pass3_options = options.copy()
-                pass3_options['dpi'] = base_dpi  # Keep same DPI for consistency
-                pass3_options['force_ocr'] = True
-                pass3_options['min_confidence'] = 40.0  # Lower threshold for difficult pages
+                # Same Claude Vision, but with enhanced prompt for difficult pages
+                pass2_options = options.copy()
+                pass2_options['dpi'] = base_dpi
+                pass2_options['enhanced_prompt'] = True  # More aggressive extraction
                 
-                pass3_id = await self._run_pass(
-                    document_id, "ocr_table", pdf_path, pass3_options, 
-                    pass_number=3, target_pages=low_confidence_pages
+                pass2_id = await self._run_pass(
+                    document_id, "claude_vision", pdf_path, pass2_options, 
+                    pass_number=2, target_pages=low_confidence_pages
                 )
-                pass_ids.append(pass3_id)
-                logger.info(f"[AUTO-MULTI-PASS] Document {document_id} - Pass 3 completed: Pass ID {pass3_id}")
+                pass_ids.append(pass2_id)
+                logger.info(f"[AUTO-MULTI-PASS] Document {document_id} - Pass 2 completed: Pass ID {pass2_id}")
             except Exception as e:
-                logger.error(f"[AUTO-MULTI-PASS] Document {document_id} - Pass 3 failed: {e}", exc_info=True)
-                # Not critical, continue
+                logger.error(f"[AUTO-MULTI-PASS] Document {document_id} - Pass 2 failed: {e}", exc_info=True)
+                # Not critical, we have Pass 1 results
         else:
-            logger.info(f"[AUTO-MULTI-PASS] Document {document_id} - No low confidence pages found, skipping targeted Pass 3")
+            logger.info(
+                f"[AUTO-MULTI-PASS] Document {document_id} - "
+                f"Pass 1 quality excellent (conf={pass1_stats.get('avg_confidence', 0):.1f}%), skipping Pass 2"
+            )
         
         if progress_callback:
             progress_callback(100, "All passes complete, consolidating...")
@@ -174,6 +155,9 @@ class MultiPassProcessor:
             strategy = StrategyFactory.create(method, options.get('debug_mode', False))
             validator = DataValidator(min_confidence=options.get('min_confidence', 50.0))
             
+            # Track API costs
+            total_api_cost = 0.0
+            
             # Determine pages to process
             if target_pages:
                 pages_to_process = target_pages
@@ -219,6 +203,10 @@ class MultiPassProcessor:
                     
                     self.db.commit()
                     
+                    # Track API costs for Claude Vision
+                    if method == "claude_vision" and hasattr(strategy, 'get_cost'):
+                        total_api_cost = strategy.get_cost()
+                    
                 except Exception as e:
                     logger.error(f"Error processing page {page_num}: {e}", exc_info=True)
                     self.db.rollback()
@@ -233,11 +221,15 @@ class MultiPassProcessor:
             extraction_pass.status = ExtractionStatus.COMPLETED
             extraction_pass.items_extracted = len(final_items)
             extraction_pass.processing_time = processing_time
+            extraction_pass.api_cost = total_api_cost if total_api_cost > 0 else None
             
             if final_items:
                 extraction_pass.avg_confidence = float(sum(i.confidence for i in final_items) / len(final_items))
             
             self.db.commit()
+            
+            if total_api_cost > 0:
+                logger.info(f"Pass {pass_id} API cost: ${total_api_cost:.4f}")
             
             logger.info(f"Pass {pass_id} ({method}) complete: {len(final_items)} items")
             return pass_id
