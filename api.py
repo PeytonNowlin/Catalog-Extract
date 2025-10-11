@@ -619,7 +619,7 @@ async def get_available_methods():
             {
                 "id": "auto_multi_pass",
                 "name": "Auto Multi-Pass",
-                "description": "Automatically runs 2-3 methods and merges best results (recommended)"
+                "description": "3 OCR passes with different DPI settings (300→400→450) - recommended for image catalogs"
             },
             {
                 "id": "text_direct",
