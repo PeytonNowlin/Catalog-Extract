@@ -200,7 +200,8 @@ async def process_extraction_pass(
                 db.commit()
                 
             except Exception as e:
-                logger.error(f"Error processing page {page_num}: {e}")
+                logger.error(f"Error processing page {page_num}: {e}", exc_info=True)
+                db.rollback()
                 continue
         
         # Validate items

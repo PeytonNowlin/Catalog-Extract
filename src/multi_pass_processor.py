@@ -215,7 +215,8 @@ class MultiPassProcessor:
                     self.db.commit()
                     
                 except Exception as e:
-                    logger.error(f"Error processing page {page_num}: {e}")
+                    logger.error(f"Error processing page {page_num}: {e}", exc_info=True)
+                    self.db.rollback()
                     continue
             
             # Validate and deduplicate
