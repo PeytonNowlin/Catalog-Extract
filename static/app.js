@@ -1,27 +1,45 @@
-// API base URL
+// Multi-Pass Catalog Extractor - Database-backed
 const API_BASE = '';
 
-// Current job ID
-let currentJobId = null;
+let currentDocumentId = null;
+let currentPassId = null;
 let pollInterval = null;
+
+// Method descriptions
+const METHOD_DESCRIPTIONS = {
+    'text_direct': 'Fast extraction from text-based PDFs',
+    'ocr_table': 'OCR with table detection - best for structured data',
+    'ocr_plain': 'OCR without table detection - good for unstructured text',
+    'ocr_aggressive': 'High-DPI OCR with multiple attempts - most thorough',
+    'hybrid': 'Combines multiple methods - most comprehensive'
+};
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
     setupFileUpload();
-    loadRecentJobs();
+    setupMethodSelector();
+    loadRecentDocuments();
 });
+
+// Setup method selector
+function setupMethodSelector() {
+    const select = document.getElementById('extractionMethod');
+    const description = document.getElementById('methodDescription');
+    
+    select.addEventListener('change', (e) => {
+        description.textContent = METHOD_DESCRIPTIONS[e.target.value] || '';
+    });
+}
 
 // File upload setup
 function setupFileUpload() {
     const fileInput = document.getElementById('fileInput');
     const uploadBox = document.getElementById('uploadBox');
 
-    // Click to upload
     uploadBox.addEventListener('click', () => {
         fileInput.click();
     });
 
-    // File selected
     fileInput.addEventListener('change', (e) => {
         if (e.target.files.length > 0) {
             uploadFile(e.target.files[0]);
@@ -59,6 +77,7 @@ async function uploadFile(file) {
     formData.append('file', file);
 
     // Get options
+    const method = document.getElementById('extractionMethod').value;
     const startPage = document.getElementById('startPage').value || 0;
     const endPage = document.getElementById('endPage').value;
     const dpi = document.getElementById('dpi').value || 300;
@@ -66,8 +85,8 @@ async function uploadFile(file) {
     const forceOcr = document.getElementById('forceOcr').checked;
     const debugMode = document.getElementById('debugMode').checked;
 
-    // Build URL with query params
-    let url = `${API_BASE}/api/upload?start_page=${startPage}&dpi=${dpi}&min_confidence=${minConfidence}&force_ocr=${forceOcr}&debug_mode=${debugMode}`;
+    // Build URL
+    let url = `${API_BASE}/api/documents/upload?method=${method}&start_page=${startPage}&dpi=${dpi}&min_confidence=${minConfidence}&force_ocr=${forceOcr}&debug_mode=${debugMode}`;
     if (endPage) {
         url += `&end_page=${endPage}`;
     }
@@ -82,17 +101,16 @@ async function uploadFile(file) {
             throw new Error('Upload failed');
         }
 
-        const job = await response.json();
-        currentJobId = job.job_id;
+        const result = await response.json();
+        currentDocumentId = result.document_id;
+        currentPassId = result.pass_id;
 
         // Show processing section
         document.getElementById('processingSection').style.display = 'block';
         document.getElementById('resultsSection').style.display = 'none';
-        
-        // Scroll to processing section
         setTimeout(() => scrollToSection('processingSection'), 100);
 
-        // Start polling for status
+        // Start polling
         startPolling();
 
     } catch (error) {
@@ -100,75 +118,82 @@ async function uploadFile(file) {
     }
 }
 
-// Start polling job status
+// Start polling
 function startPolling() {
     if (pollInterval) {
         clearInterval(pollInterval);
     }
 
     pollInterval = setInterval(async () => {
-        await updateJobStatus();
-    }, 1000); // Poll every second
+        await updatePassStatus();
+    }, 2000); // Poll every 2 seconds
 }
 
-// Update job status
-async function updateJobStatus() {
-    if (!currentJobId) return;
+// Update pass status
+async function updatePassStatus() {
+    if (!currentPassId) return;
 
     try {
-        const response = await fetch(`${API_BASE}/api/jobs/${currentJobId}`);
-        const job = await response.json();
+        const response = await fetch(`${API_BASE}/api/passes/${currentPassId}`);
+        const pass = await response.json();
 
-        // Update progress bar
+        // Update progress
         const progressFill = document.getElementById('progressFill');
         const progressText = document.getElementById('progressText');
         const progressPercent = document.getElementById('progressPercent');
         const progressPage = document.getElementById('progressPage');
 
-        progressFill.style.width = job.progress + '%';
-        progressPercent.textContent = Math.round(job.progress) + '%';
-        progressText.textContent = job.message;
-        
-        if (job.current_page && job.total_pages) {
-            progressPage.textContent = `Page ${job.current_page} of ${job.total_pages}`;
-        }
+        progressFill.style.width = pass.progress + '%';
+        progressPercent.textContent = Math.round(pass.progress) + '%';
+        progressText.textContent = pass.status === 'processing' 
+            ? `Extracting data... (${pass.items_extracted} items found)`
+            : 'Processing...';
 
         // Check if completed
-        if (job.status === 'completed') {
+        if (pass.status === 'completed') {
             clearInterval(pollInterval);
-            await showResults(currentJobId);
-            await loadRecentJobs();
-        } else if (job.status === 'failed') {
+            await showResults(currentDocumentId);
+            await loadRecentDocuments();
+        } else if (pass.status === 'failed') {
             clearInterval(pollInterval);
-            progressText.textContent = 'Error: ' + (job.error || 'Processing failed');
+            progressText.textContent = 'Error: ' + (pass.error_message || 'Processing failed');
             progressText.style.color = '#ef4444';
-            await loadRecentJobs();
+            await loadRecentDocuments();
         }
 
     } catch (error) {
-        console.error('Error polling job status:', error);
+        console.error('Error polling status:', error);
     }
 }
 
 // Show results
-async function showResults(jobId) {
+async function showResults(documentId) {
     try {
-        // Get results
-        const response = await fetch(`${API_BASE}/api/jobs/${jobId}/results`);
-        const results = await response.json();
+        // Get document details
+        const docResponse = await fetch(`${API_BASE}/api/documents/${documentId}`);
+        const doc = await docResponse.json();
+
+        // Get consolidated items
+        const itemsResponse = await fetch(`${API_BASE}/api/documents/${documentId}/items/consolidated`);
+        const items = await itemsResponse.json();
 
         // Show results section
         document.getElementById('processingSection').style.display = 'none';
         document.getElementById('resultsSection').style.display = 'block';
-        
-        // Scroll to results
         setTimeout(() => scrollToSection('resultsSection'), 100);
 
+        // Show passes
+        if (doc.passes && doc.passes.length > 0) {
+            showPasses(doc.passes);
+        }
+
         // Calculate stats
-        const totalItems = results.length;
-        const withPrices = results.filter(r => r.price_value !== null).length;
-        const withPartNumbers = results.filter(r => r.part_number).length;
-        const avgConfidence = results.reduce((sum, r) => sum + r.confidence, 0) / totalItems || 0;
+        const totalItems = items.length;
+        const withPrices = items.filter(r => r.price_value !== null).length;
+        const withPartNumbers = items.filter(r => r.part_number).length;
+        const avgConfidence = totalItems > 0 
+            ? items.reduce((sum, r) => sum + (r.avg_confidence || 0), 0) / totalItems 
+            : 0;
 
         // Display stats
         const statsHtml = `
@@ -193,7 +218,7 @@ async function showResults(jobId) {
 
         // Display results table
         const tableBody = document.getElementById('resultsTableBody');
-        tableBody.innerHTML = results.map(item => `
+        tableBody.innerHTML = items.map(item => `
             <tr>
                 <td>${item.brand_code || '-'}</td>
                 <td><strong>${item.part_number || '-'}</strong></td>
@@ -202,25 +227,106 @@ async function showResults(jobId) {
                 <td>${item.currency}</td>
                 <td>${item.page}</td>
                 <td>
-                    <span class="confidence-badge ${getConfidenceClass(item.confidence)}">
-                        ${item.confidence.toFixed(1)}%
+                    <span class="confidence-badge ${getConfidenceClass(item.avg_confidence)}">
+                        ${item.avg_confidence.toFixed(1)}%
                     </span>
                 </td>
+                <td>${item.source_count} pass${item.source_count > 1 ? 'es' : ''}</td>
             </tr>
         `).join('');
 
-        // Setup download buttons
+        // Setup download button
         document.getElementById('downloadCsvBtn').onclick = () => {
-            window.location.href = `${API_BASE}/api/jobs/${jobId}/download/csv`;
+            window.location.href = `${API_BASE}/api/documents/${documentId}/export/csv`;
         };
 
-        document.getElementById('downloadSummaryBtn').onclick = () => {
-            window.location.href = `${API_BASE}/api/jobs/${jobId}/download/summary`;
-        };
+        // Setup new pass button
+        const newPassBtn = document.getElementById('newPassBtn');
+        newPassBtn.style.display = 'inline-flex';
+        newPassBtn.onclick = () => showNewPassDialog(documentId);
 
     } catch (error) {
         console.error('Error loading results:', error);
         alert('Error loading results: ' + error.message);
+    }
+}
+
+// Show passes
+function showPasses(passes) {
+    const passesOverview = document.getElementById('passesOverview');
+    const passesList = document.getElementById('passesList');
+
+    passesOverview.style.display = 'block';
+
+    passesList.innerHTML = passes.map(pass => `
+        <div class="pass-item">
+            <div class="pass-info">
+                <div class="pass-title">
+                    Pass #${pass.pass_number}: ${pass.method.replace('_', ' ').toUpperCase()}
+                </div>
+                <div class="pass-meta">
+                    ${pass.items_extracted} items | 
+                    ${pass.avg_confidence ? pass.avg_confidence.toFixed(1) + '% confidence | ' : ''}
+                    ${pass.processing_time ? pass.processing_time.toFixed(1) + 's' : ''}
+                </div>
+            </div>
+            <span class="job-status status-${pass.status}">${pass.status}</span>
+        </div>
+    `).join('');
+}
+
+// Show new pass dialog
+function showNewPassDialog(documentId) {
+    const method = prompt(
+        'Select extraction method:\n\n' +
+        '1. text_direct - Fast text extraction\n' +
+        '2. ocr_table - OCR with tables\n' +
+        '3. ocr_plain - OCR plain text\n' +
+        '4. ocr_aggressive - Thorough OCR\n' +
+        '5. hybrid - All methods\n\n' +
+        'Enter method name:',
+        'ocr_aggressive'
+    );
+
+    if (method) {
+        createNewPass(documentId, method);
+    }
+}
+
+// Create new pass
+async function createNewPass(documentId, method) {
+    try {
+        const response = await fetch(`${API_BASE}/api/documents/${documentId}/passes`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                method: method,
+                start_page: 0,
+                end_page: null,
+                dpi: 300,
+                min_confidence: 50.0,
+                force_ocr: false,
+                debug_mode: false
+            })
+        });
+
+        if (!response.ok) {
+            throw new Error('Failed to create pass');
+        }
+
+        const result = await response.json();
+        currentPassId = result.pass_id;
+
+        // Show processing
+        document.getElementById('resultsSection').style.display = 'none';
+        document.getElementById('processingSection').style.display = 'block';
+        scrollToSection('processingSection');
+
+        // Start polling
+        startPolling();
+
+    } catch (error) {
+        alert('Error creating new pass: ' + error.message);
     }
 }
 
@@ -231,7 +337,7 @@ function getConfidenceClass(confidence) {
     return 'confidence-low';
 }
 
-// Smooth scroll to section
+// Smooth scroll
 function scrollToSection(sectionId) {
     const section = document.getElementById(sectionId);
     if (section) {
@@ -239,98 +345,47 @@ function scrollToSection(sectionId) {
     }
 }
 
-// Load recent jobs
-async function loadRecentJobs() {
+// Load recent documents
+async function loadRecentDocuments() {
     try {
-        const response = await fetch(`${API_BASE}/api/jobs?limit=10`);
-        const jobs = await response.json();
+        const response = await fetch(`${API_BASE}/api/documents`);
+        const docs = await response.json();
 
         const jobsList = document.getElementById('jobsList');
         
-        if (jobs.length === 0) {
-            jobsList.innerHTML = '<p style="color: #666;">No recent jobs</p>';
+        if (docs.length === 0) {
+            jobsList.innerHTML = '<p style="color: #666;">No documents yet</p>';
             return;
         }
 
-        jobsList.innerHTML = jobs.map(job => `
+        jobsList.innerHTML = docs.map(doc => `
             <div class="job-card">
                 <div class="job-header">
-                    <div class="job-name">${job.pdf_name}</div>
-                    <span class="job-status status-${job.status}">${job.status.toUpperCase()}</span>
+                    <div class="job-name">${doc.filename}</div>
+                    <span class="job-status status-completed">${doc.pass_count} pass${doc.pass_count > 1 ? 'es' : ''}</span>
                 </div>
                 <div class="job-details">
-                    ${job.items_extracted > 0 ? `${job.items_extracted} items extracted | ` : ''}
-                    ${new Date(job.created_at).toLocaleString()}
-                    ${job.total_pages ? ` | ${job.total_pages} pages` : ''}
+                    ${doc.total_pages} pages | Uploaded: ${new Date(doc.upload_date).toLocaleString()}
                 </div>
                 <div class="job-actions">
-                    ${job.status === 'completed' ? `
-                        <button class="btn btn-success" onclick="viewResults('${job.job_id}')">
-                            View Results
-                        </button>
-                        <button class="btn btn-secondary" onclick="downloadCsv('${job.job_id}')">
-                            Download CSV
-                        </button>
-                    ` : ''}
-                    ${job.status === 'processing' ? `
-                        <button class="btn btn-primary" onclick="viewJob('${job.job_id}')">
-                            View Progress
-                        </button>
-                    ` : ''}
-                    <button class="btn btn-danger" onclick="deleteJob('${job.job_id}')">
-                        Delete
+                    <button class="btn btn-success" onclick="viewDocument(${doc.id})">
+                        View Results
+                    </button>
+                    <button class="btn btn-primary" onclick="showNewPassDialog(${doc.id})">
+                        + New Pass
                     </button>
                 </div>
             </div>
         `).join('');
 
     } catch (error) {
-        console.error('Error loading jobs:', error);
+        console.error('Error loading documents:', error);
     }
 }
 
-// View results
-async function viewResults(jobId) {
-    currentJobId = jobId;
-    await showResults(jobId);
-    scrollToSection('resultsSection');
-}
-
-// View job progress
-async function viewJob(jobId) {
-    currentJobId = jobId;
-    document.getElementById('processingSection').style.display = 'block';
-    document.getElementById('resultsSection').style.display = 'none';
-    startPolling();
-    scrollToSection('processingSection');
-}
-
-// Download CSV
-function downloadCsv(jobId) {
-    window.location.href = `${API_BASE}/api/jobs/${jobId}/download/csv`;
-}
-
-// Delete job
-async function deleteJob(jobId) {
-    if (!confirm('Are you sure you want to delete this job?')) {
-        return;
-    }
-
-    try {
-        await fetch(`${API_BASE}/api/jobs/${jobId}`, {
-            method: 'DELETE'
-        });
-        
-        if (currentJobId === jobId) {
-            currentJobId = null;
-            if (pollInterval) {
-                clearInterval(pollInterval);
-            }
-        }
-        
-        await loadRecentJobs();
-    } catch (error) {
-        alert('Error deleting job: ' + error.message);
-    }
+// View document
+async function viewDocument(documentId) {
+    currentDocumentId = documentId;
+    await showResults(documentId);
 }
 

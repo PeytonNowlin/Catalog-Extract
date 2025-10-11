@@ -1,48 +1,47 @@
 #!/usr/bin/env python3
 """
-Catalog Extractor API
-FastAPI backend for PDF catalog extraction with web UI.
+Catalog Extractor API with Database & Multi-Pass Support
 """
 import os
-import sys
-import shutil
-import logging
+import hashlib
+import time
 from pathlib import Path
 from typing import Optional, List
-import asyncio
 from datetime import datetime
-import uuid
 
-from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks, Query
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks, Query, Depends
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import uvicorn
+from sqlalchemy.orm import Session
 
+from src.database import (
+    get_db, Document, ExtractionPass, ExtractedItem, ConsolidatedItem,
+    ExtractionStatus, ExtractionMethod
+)
 from src.pdf_handler import PDFHandler
-from src.preprocessor import ImagePreprocessor
-from src.ocr_handler import OCRHandler
-from src.table_detector import TableDetector
-from src.extractor import DataExtractor, ExtractedItem
+from src.extraction_strategies import StrategyFactory
 from src.validator import DataValidator
 from src.exporter import DataExporter
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+import logging
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Paths
+UPLOAD_DIR = Path("uploads")
+OUTPUT_DIR = Path("outputs")
+UPLOAD_DIR.mkdir(exist_ok=True)
+OUTPUT_DIR.mkdir(exist_ok=True)
 
 # Create FastAPI app
 app = FastAPI(
     title="Catalog Extractor API",
-    description="Extract part numbers and prices from PDF catalogs using OCR",
-    version="1.0.0"
+    description="Multi-pass PDF catalog extraction with database persistence",
+    version="2.0.0"
 )
 
-# CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -51,45 +50,40 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Storage directories
-UPLOAD_DIR = Path("uploads")
-OUTPUT_DIR = Path("outputs")
-UPLOAD_DIR.mkdir(exist_ok=True)
-OUTPUT_DIR.mkdir(exist_ok=True)
 
-# Job status tracking
-jobs = {}
-
-
-class ExtractionOptions(BaseModel):
-    """Options for PDF extraction."""
+# Pydantic Models
+class ExtractionOptionsModel(BaseModel):
+    method: str = "ocr_table"
     start_page: int = 0
     end_page: Optional[int] = None
-    force_ocr: bool = False
-    debug_mode: bool = False
     dpi: int = 300
     min_confidence: float = 50.0
+    force_ocr: bool = False
+    debug_mode: bool = False
 
 
-class JobStatus(BaseModel):
-    """Status of an extraction job."""
-    job_id: str
-    status: str  # 'pending', 'processing', 'completed', 'failed'
-    progress: float  # 0-100
-    message: str
-    pdf_name: str
-    total_pages: Optional[int] = None
-    current_page: Optional[int] = None
-    items_extracted: int = 0
+class DocumentResponse(BaseModel):
+    id: int
+    filename: str
+    file_hash: str
+    total_pages: int
+    upload_date: str
+    extraction_passes: List[dict] = []
+
+
+class PassResponse(BaseModel):
+    id: int
+    pass_number: int
+    method: str
+    status: str
+    items_extracted: int
+    avg_confidence: Optional[float]
+    processing_time: Optional[float]
     created_at: str
-    completed_at: Optional[str] = None
-    csv_file: Optional[str] = None
-    summary_file: Optional[str] = None
-    error: Optional[str] = None
+    completed_at: Optional[str]
 
 
-class ExtractedItemResponse(BaseModel):
-    """Response model for extracted item."""
+class ItemResponse(BaseModel):
     brand_code: Optional[str]
     part_number: Optional[str]
     price_type: Optional[str]
@@ -97,332 +91,539 @@ class ExtractedItemResponse(BaseModel):
     currency: str
     page: int
     confidence: float
-    raw_text: str
+    extraction_method: str
 
 
-def create_job(pdf_name: str) -> str:
-    """Create a new extraction job."""
-    job_id = str(uuid.uuid4())
-    jobs[job_id] = {
-        'job_id': job_id,
-        'status': 'pending',
-        'progress': 0,
-        'message': 'Job created',
-        'pdf_name': pdf_name,
-        'total_pages': None,
-        'current_page': None,
-        'items_extracted': 0,
-        'created_at': datetime.now().isoformat(),
-        'completed_at': None,
-        'csv_file': None,
-        'summary_file': None,
-        'error': None
-    }
-    return job_id
+# Helper Functions
+def calculate_file_hash(file_path: str) -> str:
+    """Calculate SHA256 hash of file."""
+    sha256 = hashlib.sha256()
+    with open(file_path, 'rb') as f:
+        for chunk in iter(lambda: f.read(4096), b""):
+            sha256.update(chunk)
+    return sha256.hexdigest()
 
 
-def update_job(job_id: str, **kwargs):
-    """Update job status."""
-    if job_id in jobs:
-        jobs[job_id].update(kwargs)
-
-
-async def process_pdf_async(
-    job_id: str,
+async def process_extraction_pass(
+    pass_id: int,
+    document_id: int,
     pdf_path: str,
-    options: ExtractionOptions
+    options: ExtractionOptionsModel
 ):
-    """Process PDF in background."""
+    """Background task to process an extraction pass."""
+    db = next(get_db())
+    
     try:
-        update_job(job_id, status='processing', message='Initializing...')
+        # Get pass from database
+        extraction_pass = db.query(ExtractionPass).filter(ExtractionPass.id == pass_id).first()
+        if not extraction_pass:
+            return
+        
+        # Update status
+        extraction_pass.status = ExtractionStatus.PROCESSING
+        extraction_pass.started_at = datetime.utcnow()
+        db.commit()
+        
+        start_time = time.time()
         
         # Initialize components
         pdf_handler = PDFHandler(pdf_path)
-        preprocessor = ImagePreprocessor(debug_mode=options.debug_mode)
-        ocr_handler = OCRHandler()
-        table_detector = TableDetector(debug_mode=options.debug_mode)
-        extractor = DataExtractor()
+        strategy = StrategyFactory.create(options.method, options.debug_mode)
         validator = DataValidator(min_confidence=options.min_confidence)
-        exporter = DataExporter()
         
         # Determine page range
-        start_page = options.start_page
         end_page = options.end_page if options.end_page else pdf_handler.page_count
-        total_pages = end_page - start_page
-        
-        update_job(
-            job_id,
-            total_pages=total_pages,
-            message=f'Processing {total_pages} pages...'
-        )
+        total_pages = end_page - options.start_page
         
         all_items = []
         
         # Process each page
-        for page_num in range(start_page, end_page):
-            update_job(
-                job_id,
-                current_page=page_num + 1,
-                progress=(page_num - start_page) / total_pages * 80,
-                message=f'Processing page {page_num + 1}/{end_page}...'
-            )
+        for page_num in range(options.start_page, end_page):
+            logger.info(f"Pass {pass_id}: Processing page {page_num + 1}/{end_page}")
             
             try:
-                # Check if text-based
-                is_text_based = pdf_handler.is_text_based(page_num)
+                # Extract using strategy
+                items = strategy.extract(
+                    pdf_handler,
+                    page_num,
+                    {
+                        'dpi': options.dpi,
+                        'force_ocr': options.force_ocr
+                    }
+                )
                 
-                if is_text_based and not options.force_ocr:
-                    text = pdf_handler.extract_text_direct(page_num)
-                    if text:
-                        items = extractor.extract_from_text(text, page_num)
-                        all_items.extend(items)
-                else:
-                    # OCR-based extraction
-                    image = pdf_handler.render_page_to_image(page_num, dpi=options.dpi)
-                    if image is not None:
-                        preprocessed = preprocessor.preprocess(image, page_num)
-                        full_text, words, lines = ocr_handler.extract_text(preprocessed, page_num)
-                        rows = table_detector.detect_tables(preprocessed, lines, page_num)
-                        
-                        if rows:
-                            items = extractor.extract_from_rows(rows, page_num)
-                        else:
-                            items = extractor.extract_from_text(full_text, page_num, words)
-                        
-                        all_items.extend(items)
-            
+                # Store items in database
+                for item in items:
+                    db_item = ExtractedItem(
+                        extraction_pass_id=pass_id,
+                        brand_code=item.brand_code,
+                        part_number=item.part_number,
+                        price_type=item.price_type,
+                        price_value=item.price_value,
+                        currency=item.currency,
+                        page=item.page,
+                        confidence=item.confidence,
+                        raw_text=item.raw_text,
+                        bbox_x=item.bbox[0] if item.bbox else None,
+                        bbox_y=item.bbox[1] if item.bbox else None,
+                        bbox_width=item.bbox[2] if item.bbox else None,
+                        bbox_height=item.bbox[3] if item.bbox else None,
+                        extraction_method=ExtractionMethod(options.method)
+                    )
+                    db.add(db_item)
+                    all_items.append(item)
+                
+                db.commit()
+                
             except Exception as e:
                 logger.error(f"Error processing page {page_num}: {e}")
                 continue
         
-        # Validate and deduplicate
-        update_job(job_id, progress=85, message='Validating data...')
+        # Validate items
         validated_items = validator.validate_items(all_items)
         final_items = validator.deduplicate_items(validated_items)
         
-        # Export results
-        update_job(job_id, progress=90, message='Exporting results...')
-        output_dir = OUTPUT_DIR / job_id
-        output_dir.mkdir(exist_ok=True)
+        # Update pass status
+        processing_time = time.time() - start_time
+        extraction_pass.status = ExtractionStatus.COMPLETED
+        extraction_pass.completed_at = datetime.utcnow()
+        extraction_pass.items_extracted = len(final_items)
+        extraction_pass.processing_time = processing_time
         
-        base_name = Path(pdf_path).stem
-        csv_path = output_dir / f'{base_name}_extracted.csv'
-        summary_path = output_dir / f'{base_name}_summary.txt'
+        if final_items:
+            extraction_pass.avg_confidence = sum(i.confidence for i in final_items) / len(final_items)
         
-        exporter.export_to_csv(final_items, str(csv_path))
-        exporter.export_summary(final_items, str(summary_path))
+        db.commit()
         
-        # Complete job
-        update_job(
-            job_id,
-            status='completed',
-            progress=100,
-            message=f'Completed! Extracted {len(final_items)} items.',
-            items_extracted=len(final_items),
-            completed_at=datetime.now().isoformat(),
-            csv_file=str(csv_path),
-            summary_file=str(summary_path)
-        )
+        # Trigger consolidation
+        consolidate_document_items(document_id, db)
+        
+        logger.info(f"Pass {pass_id} completed: {len(final_items)} items extracted")
         
     except Exception as e:
-        logger.error(f"Job {job_id} failed: {e}", exc_info=True)
-        update_job(
-            job_id,
-            status='failed',
-            message='Processing failed',
-            error=str(e),
-            completed_at=datetime.now().isoformat()
-        )
+        logger.error(f"Pass {pass_id} failed: {e}", exc_info=True)
+        extraction_pass.status = ExtractionStatus.FAILED
+        extraction_pass.error_message = str(e)
+        extraction_pass.completed_at = datetime.utcnow()
+        db.commit()
+    
+    finally:
+        db.close()
 
+
+def consolidate_document_items(document_id: int, db: Session):
+    """Consolidate items from all passes for a document."""
+    logger.info(f"Consolidating items for document {document_id}")
+    
+    # Get all completed passes
+    passes = db.query(ExtractionPass).filter(
+        ExtractionPass.document_id == document_id,
+        ExtractionPass.status == ExtractionStatus.COMPLETED
+    ).all()
+    
+    if not passes:
+        return
+    
+    # Get all items from all passes
+    all_items = []
+    for pass_obj in passes:
+        items = db.query(ExtractedItem).filter(
+            ExtractedItem.extraction_pass_id == pass_obj.id
+        ).all()
+        all_items.extend(items)
+    
+    # Group by (part_number, page)
+    grouped = {}
+    for item in all_items:
+        key = (item.part_number, item.page)
+        if key not in grouped:
+            grouped[key] = []
+        grouped[key].append(item)
+    
+    # Clear old consolidated items
+    db.query(ConsolidatedItem).filter(
+        ConsolidatedItem.document_id == document_id
+    ).delete()
+    
+    # Create consolidated items (best from each group)
+    for (part_number, page), items in grouped.items():
+        # Choose item with highest confidence
+        best_item = max(items, key=lambda x: x.confidence)
+        
+        consolidated = ConsolidatedItem(
+            document_id=document_id,
+            brand_code=best_item.brand_code,
+            part_number=best_item.part_number,
+            price_type=best_item.price_type,
+            price_value=best_item.price_value,
+            currency=best_item.currency,
+            page=page,
+            avg_confidence=sum(i.confidence for i in items) / len(items),
+            source_count=len(items)
+        )
+        db.add(consolidated)
+    
+    db.commit()
+    logger.info(f"Consolidated {len(grouped)} unique items for document {document_id}")
+
+
+# API Endpoints
 
 @app.get("/")
 async def root():
-    """Serve the web UI."""
+    """Serve web UI."""
     return FileResponse("static/index.html")
 
 
-@app.post("/api/upload", response_model=JobStatus)
-async def upload_pdf(
+@app.post("/api/documents/upload")
+async def upload_document(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    start_page: int = Query(0, ge=0),
-    end_page: Optional[int] = Query(None, ge=1),
+    method: str = Query("ocr_table"),
+    start_page: int = Query(0),
+    end_page: Optional[int] = Query(None),
+    dpi: int = Query(300),
+    min_confidence: float = Query(50.0),
     force_ocr: bool = Query(False),
     debug_mode: bool = Query(False),
-    dpi: int = Query(300, ge=72, le=600),
-    min_confidence: float = Query(50.0, ge=0, le=100)
+    db: Session = Depends(get_db)
 ):
-    """
-    Upload a PDF and start extraction job.
+    """Upload PDF and start first extraction pass."""
     
-    - **file**: PDF file to process
-    - **start_page**: Starting page (0-indexed)
-    - **end_page**: Ending page (exclusive), None for all
-    - **force_ocr**: Force OCR even for text-based PDFs
-    - **debug_mode**: Save debug images
-    - **dpi**: Resolution for rendering (72-600)
-    - **min_confidence**: Minimum confidence threshold (0-100)
-    """
-    # Validate file
     if not file.filename.endswith('.pdf'):
-        raise HTTPException(status_code=400, detail="Only PDF files are accepted")
+        raise HTTPException(400, "Only PDF files accepted")
     
-    # Create job
-    job_id = create_job(file.filename)
+    # Save file
+    file_id = str(uuid.uuid4())
+    upload_path = UPLOAD_DIR / f"{file_id}_{file.filename}"
     
-    # Save uploaded file
-    upload_path = UPLOAD_DIR / f"{job_id}_{file.filename}"
     with open(upload_path, "wb") as f:
         content = await file.read()
         f.write(content)
     
-    # Create options
-    options = ExtractionOptions(
+    # Calculate hash
+    file_hash = calculate_file_hash(str(upload_path))
+    
+    # Check if document already exists
+    existing_doc = db.query(Document).filter(Document.file_hash == file_hash).first()
+    
+    if existing_doc:
+        document = existing_doc
+        logger.info(f"Document already exists: {document.id}")
+    else:
+        # Get page count
+        pdf_handler = PDFHandler(str(upload_path))
+        
+        # Create document
+        document = Document(
+            filename=file.filename,
+            file_hash=file_hash,
+            total_pages=pdf_handler.page_count
+        )
+        db.add(document)
+        db.commit()
+        db.refresh(document)
+    
+    # Create extraction pass
+    extraction_pass = ExtractionPass(
+        document_id=document.id,
+        pass_number=len(document.extraction_passes) + 1,
+        method=ExtractionMethod(method),
         start_page=start_page,
         end_page=end_page,
-        force_ocr=force_ocr,
-        debug_mode=debug_mode,
         dpi=dpi,
-        min_confidence=min_confidence
+        min_confidence=min_confidence,
+        force_ocr=force_ocr,
+        debug_mode=debug_mode
+    )
+    db.add(extraction_pass)
+    db.commit()
+    db.refresh(extraction_pass)
+    
+    # Start processing
+    options = ExtractionOptionsModel(
+        method=method,
+        start_page=start_page,
+        end_page=end_page,
+        dpi=dpi,
+        min_confidence=min_confidence,
+        force_ocr=force_ocr,
+        debug_mode=debug_mode
     )
     
-    # Start background processing
-    background_tasks.add_task(process_pdf_async, job_id, str(upload_path), options)
-    
-    return JobStatus(**jobs[job_id])
-
-
-@app.get("/api/jobs/{job_id}", response_model=JobStatus)
-async def get_job_status(job_id: str):
-    """Get status of an extraction job."""
-    if job_id not in jobs:
-        raise HTTPException(status_code=404, detail="Job not found")
-    
-    return JobStatus(**jobs[job_id])
-
-
-@app.get("/api/jobs", response_model=List[JobStatus])
-async def list_jobs(limit: int = Query(50, ge=1, le=100)):
-    """List all jobs (most recent first)."""
-    sorted_jobs = sorted(
-        jobs.values(),
-        key=lambda x: x['created_at'],
-        reverse=True
+    background_tasks.add_task(
+        process_extraction_pass,
+        extraction_pass.id,
+        document.id,
+        str(upload_path),
+        options
     )
-    return [JobStatus(**job) for job in sorted_jobs[:limit]]
+    
+    return {
+        "document_id": document.id,
+        "pass_id": extraction_pass.id,
+        "filename": file.filename,
+        "total_pages": document.total_pages,
+        "method": method,
+        "status": "processing"
+    }
 
 
-@app.get("/api/jobs/{job_id}/results")
-async def get_results(job_id: str):
-    """Get extracted items from a completed job."""
-    if job_id not in jobs:
-        raise HTTPException(status_code=404, detail="Job not found")
+@app.get("/api/documents")
+async def list_documents(db: Session = Depends(get_db)):
+    """List all documents."""
+    docs = db.query(Document).order_by(Document.upload_date.desc()).all()
     
-    job = jobs[job_id]
+    return [{
+        "id": doc.id,
+        "filename": doc.filename,
+        "total_pages": doc.total_pages,
+        "upload_date": doc.upload_date.isoformat(),
+        "pass_count": len(doc.extraction_passes)
+    } for doc in docs]
+
+
+@app.get("/api/documents/{document_id}")
+async def get_document(document_id: int, db: Session = Depends(get_db)):
+    """Get document details."""
+    doc = db.query(Document).filter(Document.id == document_id).first()
+    if not doc:
+        raise HTTPException(404, "Document not found")
     
-    if job['status'] != 'completed':
-        raise HTTPException(status_code=400, detail="Job not completed yet")
+    passes = [{
+        "id": p.id,
+        "pass_number": p.pass_number,
+        "method": p.method.value,
+        "status": p.status.value,
+        "items_extracted": p.items_extracted,
+        "avg_confidence": p.avg_confidence,
+        "processing_time": p.processing_time,
+        "created_at": p.created_at.isoformat(),
+        "completed_at": p.completed_at.isoformat() if p.completed_at else None
+    } for p in doc.extraction_passes]
     
-    if not job['csv_file']:
-        raise HTTPException(status_code=404, detail="Results not found")
+    return {
+        "id": doc.id,
+        "filename": doc.filename,
+        "total_pages": doc.total_pages,
+        "upload_date": doc.upload_date.isoformat(),
+        "passes": passes
+    }
+
+
+@app.post("/api/documents/{document_id}/passes")
+async def create_new_pass(
+    document_id: int,
+    background_tasks: BackgroundTasks,
+    options: ExtractionOptionsModel,
+    db: Session = Depends(get_db)
+):
+    """Create a new extraction pass for existing document."""
     
-    # Read CSV and return as JSON
+    doc = db.query(Document).filter(Document.id == document_id).first()
+    if not doc:
+        raise HTTPException(404, "Document not found")
+    
+    # Find uploaded file
+    pdf_files = list(UPLOAD_DIR.glob(f"*_{doc.filename}"))
+    if not pdf_files:
+        raise HTTPException(404, "PDF file not found")
+    
+    pdf_path = str(pdf_files[0])
+    
+    # Create extraction pass
+    extraction_pass = ExtractionPass(
+        document_id=document_id,
+        pass_number=len(doc.extraction_passes) + 1,
+        method=ExtractionMethod(options.method),
+        start_page=options.start_page,
+        end_page=options.end_page,
+        dpi=options.dpi,
+        min_confidence=options.min_confidence,
+        force_ocr=options.force_ocr,
+        debug_mode=options.debug_mode
+    )
+    db.add(extraction_pass)
+    db.commit()
+    db.refresh(extraction_pass)
+    
+    # Start processing
+    background_tasks.add_task(
+        process_extraction_pass,
+        extraction_pass.id,
+        document_id,
+        pdf_path,
+        options
+    )
+    
+    return {
+        "pass_id": extraction_pass.id,
+        "pass_number": extraction_pass.pass_number,
+        "method": options.method,
+        "status": "processing"
+    }
+
+
+@app.get("/api/passes/{pass_id}")
+async def get_pass_status(pass_id: int, db: Session = Depends(get_db)):
+    """Get pass status and progress."""
+    pass_obj = db.query(ExtractionPass).filter(ExtractionPass.id == pass_id).first()
+    if not pass_obj:
+        raise HTTPException(404, "Pass not found")
+    
+    # Calculate progress
+    progress = 0
+    if pass_obj.status == ExtractionStatus.COMPLETED:
+        progress = 100
+    elif pass_obj.status == ExtractionStatus.PROCESSING:
+        # Estimate based on items extracted
+        progress = min(90, (pass_obj.items_extracted / 10) * 10)
+    
+    return {
+        "id": pass_obj.id,
+        "document_id": pass_obj.document_id,
+        "pass_number": pass_obj.pass_number,
+        "method": pass_obj.method.value,
+        "status": pass_obj.status.value,
+        "progress": progress,
+        "items_extracted": pass_obj.items_extracted,
+        "avg_confidence": pass_obj.avg_confidence,
+        "processing_time": pass_obj.processing_time,
+        "error_message": pass_obj.error_message
+    }
+
+
+@app.get("/api/passes/{pass_id}/items")
+async def get_pass_items(pass_id: int, db: Session = Depends(get_db)):
+    """Get items from specific pass."""
+    items = db.query(ExtractedItem).filter(
+        ExtractedItem.extraction_pass_id == pass_id
+    ).all()
+    
+    return [{
+        "brand_code": item.brand_code,
+        "part_number": item.part_number,
+        "price_type": item.price_type,
+        "price_value": item.price_value,
+        "currency": item.currency,
+        "page": item.page,
+        "confidence": item.confidence,
+        "raw_text": item.raw_text,
+        "extraction_method": item.extraction_method.value
+    } for item in items]
+
+
+@app.get("/api/documents/{document_id}/items/consolidated")
+async def get_consolidated_items(document_id: int, db: Session = Depends(get_db)):
+    """Get consolidated items for document."""
+    items = db.query(ConsolidatedItem).filter(
+        ConsolidatedItem.document_id == document_id
+    ).order_by(ConsolidatedItem.page, ConsolidatedItem.part_number).all()
+    
+    return [{
+        "brand_code": item.brand_code,
+        "part_number": item.part_number,
+        "price_type": item.price_type,
+        "price_value": item.price_value,
+        "currency": item.currency,
+        "page": item.page,
+        "avg_confidence": item.avg_confidence,
+        "source_count": item.source_count
+    } for item in items]
+
+
+@app.get("/api/documents/{document_id}/export/csv")
+async def export_csv(document_id: int, db: Session = Depends(get_db)):
+    """Export consolidated items to CSV."""
+    doc = db.query(Document).filter(Document.id == document_id).first()
+    if not doc:
+        raise HTTPException(404, "Document not found")
+    
+    items = db.query(ConsolidatedItem).filter(
+        ConsolidatedItem.document_id == document_id
+    ).all()
+    
+    # Create CSV
+    output_dir = OUTPUT_DIR / str(document_id)
+    output_dir.mkdir(exist_ok=True)
+    csv_path = output_dir / f"{doc.filename}_consolidated.csv"
+    
     import csv
-    results = []
-    
-    with open(job['csv_file'], 'r', encoding='utf-8') as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            results.append({
-                'brand_code': row['brand_code'],
-                'part_number': row['part_number'],
-                'price_type': row['price_type'],
-                'price_value': float(row['price_value']) if row['price_value'] else None,
-                'currency': row['currency'],
-                'page': int(row['page']),
-                'confidence': float(row['confidence']),
-                'raw_text': row['raw_text']
+    with open(csv_path, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.DictWriter(f, fieldnames=[
+            'brand_code', 'part_number', 'price_type', 'price_value',
+            'currency', 'page', 'avg_confidence', 'source_count'
+        ])
+        writer.writeheader()
+        
+        for item in items:
+            writer.writerow({
+                'brand_code': item.brand_code or '',
+                'part_number': item.part_number or '',
+                'price_type': item.price_type or '',
+                'price_value': f"{item.price_value:.2f}" if item.price_value else '',
+                'currency': item.currency,
+                'page': item.page,
+                'avg_confidence': f"{item.avg_confidence:.2f}",
+                'source_count': item.source_count
             })
     
-    return results
+    return FileResponse(csv_path, media_type='text/csv', filename=csv_path.name)
 
 
-@app.get("/api/jobs/{job_id}/download/csv")
-async def download_csv(job_id: str):
-    """Download CSV file for a completed job."""
-    if job_id not in jobs:
-        raise HTTPException(status_code=404, detail="Job not found")
-    
-    job = jobs[job_id]
-    
-    if job['status'] != 'completed':
-        raise HTTPException(status_code=400, detail="Job not completed yet")
-    
-    if not job['csv_file'] or not os.path.exists(job['csv_file']):
-        raise HTTPException(status_code=404, detail="CSV file not found")
-    
-    return FileResponse(
-        job['csv_file'],
-        media_type='text/csv',
-        filename=os.path.basename(job['csv_file'])
-    )
-
-
-@app.get("/api/jobs/{job_id}/download/summary")
-async def download_summary(job_id: str):
-    """Download summary file for a completed job."""
-    if job_id not in jobs:
-        raise HTTPException(status_code=404, detail="Job not found")
-    
-    job = jobs[job_id]
-    
-    if job['status'] != 'completed':
-        raise HTTPException(status_code=400, detail="Job not completed yet")
-    
-    if not job['summary_file'] or not os.path.exists(job['summary_file']):
-        raise HTTPException(status_code=404, detail="Summary file not found")
-    
-    return FileResponse(
-        job['summary_file'],
-        media_type='text/plain',
-        filename=os.path.basename(job['summary_file'])
-    )
-
-
-@app.delete("/api/jobs/{job_id}")
-async def delete_job(job_id: str):
-    """Delete a job and its associated files."""
-    if job_id not in jobs:
-        raise HTTPException(status_code=404, detail="Job not found")
-    
-    job = jobs[job_id]
-    
-    # Delete uploaded PDF
-    upload_files = list(UPLOAD_DIR.glob(f"{job_id}_*"))
-    for f in upload_files:
-        f.unlink()
-    
-    # Delete output files
-    output_dir = OUTPUT_DIR / job_id
-    if output_dir.exists():
-        shutil.rmtree(output_dir)
-    
-    # Remove from jobs dict
-    del jobs[job_id]
-    
-    return {"message": "Job deleted successfully"}
+@app.get("/api/methods")
+async def get_available_methods():
+    """Get list of available extraction methods."""
+    return {
+        "methods": [
+            {
+                "id": "text_direct",
+                "name": "Text Direct",
+                "description": "Fast extraction from text-based PDFs"
+            },
+            {
+                "id": "ocr_table",
+                "name": "OCR + Tables",
+                "description": "OCR with table detection (best for structured data)"
+            },
+            {
+                "id": "ocr_plain",
+                "name": "OCR Plain",
+                "description": "OCR without table detection"
+            },
+            {
+                "id": "ocr_aggressive",
+                "name": "OCR Aggressive",
+                "description": "High-DPI OCR with multiple attempts"
+            },
+            {
+                "id": "hybrid",
+                "name": "Hybrid",
+                "description": "Combines multiple methods (most comprehensive)"
+            }
+        ]
+    }
 
 
 @app.get("/api/health")
-async def health_check():
-    """Health check endpoint."""
+async def health_check(db: Session = Depends(get_db)):
+    """Health check."""
+    doc_count = db.query(Document).count()
+    pass_count = db.query(ExtractionPass).count()
+    
     return {
         "status": "healthy",
-        "jobs_count": len(jobs),
-        "version": "1.0.0"
+        "database": "connected",
+        "documents": doc_count,
+        "passes": pass_count,
+        "version": "2.0.0"
     }
 
 
 # Mount static files
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+
+# Add missing import
+import uuid
 

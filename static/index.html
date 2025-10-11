@@ -59,6 +59,19 @@
                         <!-- Options Panel -->
                         <div class="options-panel">
                             <h3>Extraction Options</h3>
+                            
+                            <div class="form-group">
+                                <label for="extractionMethod">Extraction Method</label>
+                                <select id="extractionMethod" class="method-select">
+                                    <option value="ocr_table">OCR + Tables (Recommended)</option>
+                                    <option value="text_direct">Text Direct (Fast)</option>
+                                    <option value="ocr_plain">OCR Plain Text</option>
+                                    <option value="ocr_aggressive">OCR Aggressive (Thorough)</option>
+                                    <option value="hybrid">Hybrid (All Methods)</option>
+                                </select>
+                                <small class="help-text" id="methodDescription">OCR with table detection - best for structured data</small>
+                            </div>
+
                             <div class="options-grid">
                                 <div class="form-group">
                                     <label for="startPage">Start Page</label>
@@ -118,21 +131,24 @@
                     <div class="card-header">
                         <h2>Extraction Results</h2>
                         <div class="header-actions">
+                            <button class="btn btn-primary" id="newPassBtn" style="display: none;">
+                                + New Pass
+                            </button>
                             <button class="btn btn-success" id="downloadCsvBtn">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
                                     <path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                                 </svg>
                                 Download CSV
                             </button>
-                            <button class="btn btn-secondary" id="downloadSummaryBtn">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                                    <path d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                                </svg>
-                                Summary
-                            </button>
                         </div>
                     </div>
                     <div class="card-body">
+                        <!-- Passes Overview -->
+                        <div class="passes-overview" id="passesOverview" style="display: none;">
+                            <h3>Extraction Passes</h3>
+                            <div id="passesList" class="passes-list"></div>
+                        </div>
+
                         <div class="stats-grid" id="statsGrid"></div>
                         <div class="table-wrapper">
                             <table class="data-table" id="resultsTable">
@@ -145,6 +161,7 @@
                                         <th>Currency</th>
                                         <th>Page</th>
                                         <th>Confidence</th>
+                                        <th>Sources</th>
                                     </tr>
                                 </thead>
                                 <tbody id="resultsTableBody"></tbody>
