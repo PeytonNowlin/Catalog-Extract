@@ -225,11 +225,12 @@ async def process_extraction_pass(
         logger.info(f"Pass {pass_id} completed: {len(final_items)} items extracted")
         
     except Exception as e:
-        logger.error(f"Pass {pass_id} failed: {e}", exc_info=True)
-        extraction_pass.status = ExtractionStatus.FAILED
-        extraction_pass.error_message = str(e)
-        extraction_pass.completed_at = datetime.utcnow()
-        db.commit()
+        logger.error(f"Extraction failed for document {document_id}, pass {pass_id}: {e}", exc_info=True)
+        if extraction_pass:
+            extraction_pass.status = ExtractionStatus.FAILED
+            extraction_pass.error_message = str(e)
+            extraction_pass.completed_at = datetime.utcnow()
+            db.commit()
     
     finally:
         db.close()
