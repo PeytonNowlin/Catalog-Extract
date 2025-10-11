@@ -144,43 +144,54 @@ class ClaudeExtractor:
         """Create optimized prompt for catalog extraction."""
         enhanced = options.get('enhanced_prompt', False)
         
-        base_prompt = """You are analyzing a product catalog page. Extract ALL part numbers and prices visible on this page.
+        base_prompt = """You are analyzing an automotive/product catalog page. Extract ALL part numbers (SKUs/item codes) and prices.
 
-For each product/item, extract:
-- part_number: The product/part identifier (alphanumeric codes, SKUs, model numbers)
-- price_value: The numeric price (just the number, no currency symbols)
-- currency: The currency (usually USD)
-- brand_code: Brand or manufacturer code if visible
-- price_type: Type of price (e.g., "retail", "sale", "msrp", "each")
+CRITICAL: A "part_number" is a SHORT alphanumeric SKU/item code, NOT a product name or description.
 
-Return ONLY valid JSON (no markdown, no explanation), formatted as an array:
+Examples of CORRECT part numbers:
+- "ABC-123", "12345-XYZ", "SUM-715030", "EXG-1181", "HRC-HCL188"
+- Short codes with letters, numbers, dashes (usually 5-15 characters)
+
+Examples of WRONG part numbers (these are product names, DO NOT use):
+- "BedRug-Classic-Bed-Liners" (this is a product name)
+- "DEE-ZEE-GUARDIAN" (this is a model/product name)
+- "RETRAX-ONE-MX" (this is a product line name)
+
+For each product, extract:
+- part_number: The SHORT SKU/item code (look near prices, in small text, in tables)
+- price_value: Numeric price only (29.99, not $29.99)
+- currency: Usually USD
+- brand_code: Brand abbreviation (2-4 letters like "SUM", "EGR", "DEE")
+- price_type: "retail", "from", "each", "sale", etc.
+
+Return ONLY valid JSON (no markdown):
 [
   {
-    "part_number": "ABC-123",
+    "part_number": "SUM-715030",
     "price_value": 29.99,
     "currency": "USD",
-    "brand_code": "XYZ",
+    "brand_code": "SUM",
     "price_type": "retail"
   }
 ]
 
 Rules:
-- Extract EVERY product you can find, even if partially visible
-- If no price is shown, omit price_value (but still include the part number)
-- If uncertain about brand_code, omit it
-- Be aggressive in finding part numbers - look for any alphanumeric codes
-- Price format: always use decimal notation (29.99, not $29.99)
-- Return empty array [] if no products found
+- Part numbers are usually NEAR the price, in tables, or in small print
+- IGNORE product names, titles, and marketing descriptions
+- If you only see a product name but no SKU code, SKIP that item
+- Extract ONLY items where you can find an actual part number code
+- Return empty array [] if no valid part numbers found
 - ONLY return the JSON array, nothing else"""
 
         if enhanced:
             base_prompt += """
 
 ENHANCED MODE: This page had low confidence in previous extraction.
-- Look extra carefully for small text and partially visible items
-- Check corners, headers, and footers for part numbers
-- Consider abbreviated or shorthand notations
-- Look for prices in unconventional locations (captions, labels, etc.)"""
+- Look extra carefully for small text and SKU codes near prices
+- Check table cells, corners, headers, and footers
+- Part numbers may be in smaller font than product names
+- Look for format like: XXX-####, ####-XX, brand codes + numbers
+- Some part numbers may be partially visible at page edges"""
         
         return base_prompt
     
