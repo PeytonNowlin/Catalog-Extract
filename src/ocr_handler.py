@@ -71,13 +71,8 @@ class OCRHandler:
     
     def _setup_windows_tesseract(self):
         """Auto-detect Tesseract installation on Windows."""
-        possible_paths = [
-            r'C:\Program Files\Tesseract-OCR\tesseract.exe',
-            r'C:\Program Files (x86)\Tesseract-OCR\tesseract.exe',
-            r'C:\Tesseract-OCR\tesseract.exe',
-            r'C:\ProgramData\chocolatey\bin\tesseract.exe',
-            r'C:\ProgramData\chocolatey\lib\tesseract\tools\tesseract.exe',
-        ]
+        import shutil
+        import subprocess
         
         # Check if already configured
         current_path = getattr(pytesseract.pytesseract, 'tesseract_cmd', None)
@@ -85,24 +80,59 @@ class OCRHandler:
             logger.info(f"Using configured Tesseract path: {current_path}")
             return
         
-        # Try to find Tesseract
+        # Try using shutil.which (checks PATH)
+        tesseract_path = shutil.which('tesseract')
+        if tesseract_path and os.path.exists(tesseract_path):
+            pytesseract.pytesseract.tesseract_cmd = tesseract_path
+            logger.info(f"Found Tesseract in PATH: {tesseract_path}")
+            return
+        
+        # Try PowerShell's Get-Command to find tesseract
+        try:
+            result = subprocess.run(
+                ['powershell', '-Command', '(Get-Command tesseract).Source'],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                tesseract_path = result.stdout.strip()
+                if os.path.exists(tesseract_path):
+                    pytesseract.pytesseract.tesseract_cmd = tesseract_path
+                    logger.info(f"Found Tesseract via PowerShell: {tesseract_path}")
+                    return
+        except Exception as e:
+            logger.debug(f"PowerShell search failed: {e}")
+        
+        # Common installation paths
+        possible_paths = [
+            r'C:\Program Files\Tesseract-OCR\tesseract.exe',
+            r'C:\Program Files (x86)\Tesseract-OCR\tesseract.exe',
+            r'C:\Tesseract-OCR\tesseract.exe',
+            r'C:\ProgramData\chocolatey\bin\tesseract.exe',
+        ]
+        
+        # Try common paths
         for path in possible_paths:
             if os.path.exists(path):
                 pytesseract.pytesseract.tesseract_cmd = path
                 logger.info(f"Found Tesseract at: {path}")
                 return
         
-        # Try to find in Chocolatey lib directory (version-specific)
+        # Search Chocolatey lib directory
         choco_lib = r'C:\ProgramData\chocolatey\lib'
         if os.path.exists(choco_lib):
-            for item in os.listdir(choco_lib):
-                if item.startswith('tesseract'):
-                    tesseract_dir = os.path.join(choco_lib, item, 'tools')
-                    tesseract_exe = os.path.join(tesseract_dir, 'tesseract.exe')
-                    if os.path.exists(tesseract_exe):
-                        pytesseract.pytesseract.tesseract_cmd = tesseract_exe
-                        logger.info(f"Found Tesseract at: {tesseract_exe}")
-                        return
+            try:
+                for item in os.listdir(choco_lib):
+                    if 'tesseract' in item.lower():
+                        # Check in tools directory
+                        tesseract_exe = os.path.join(choco_lib, item, 'tools', 'tesseract.exe')
+                        if os.path.exists(tesseract_exe):
+                            pytesseract.pytesseract.tesseract_cmd = tesseract_exe
+                            logger.info(f"Found Tesseract at: {tesseract_exe}")
+                            return
+            except Exception as e:
+                logger.debug(f"Error searching Chocolatey lib: {e}")
         
         logger.warning("Could not auto-detect Tesseract location on Windows")
     
