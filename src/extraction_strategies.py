@@ -193,6 +193,10 @@ class ClaudeVisionStrategy(ExtractionStrategy):
     """Uses Claude Vision API for intelligent extraction."""
     
     def __init__(self):
+        if not CLAUDE_AVAILABLE or ClaudeExtractor is None:
+            raise RuntimeError(
+                "Claude Vision not available. Please install: pip install anthropic python-dotenv"
+            )
         self.claude = ClaudeExtractor()
         self.total_cost = 0.0
     
