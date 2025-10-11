@@ -230,7 +230,7 @@ class MultiPassProcessor:
             extraction_pass.processing_time = processing_time
             
             if final_items:
-                extraction_pass.avg_confidence = sum(i.confidence for i in final_items) / len(final_items)
+                extraction_pass.avg_confidence = float(sum(i.confidence for i in final_items) / len(final_items))
             
             self.db.commit()
             

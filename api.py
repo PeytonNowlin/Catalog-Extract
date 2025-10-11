@@ -216,7 +216,7 @@ async def process_extraction_pass(
         extraction_pass.processing_time = processing_time
         
         if final_items:
-            extraction_pass.avg_confidence = sum(i.confidence for i in final_items) / len(final_items)
+            extraction_pass.avg_confidence = float(sum(i.confidence for i in final_items) / len(final_items))
         
         db.commit()
         
