@@ -426,14 +426,3 @@ async def health_check():
 # Mount static files
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-
-if __name__ == "__main__":
-    print("=" * 60)
-    print("Catalog Extractor API Server")
-    print("=" * 60)
-    print("\nServer starting at http://localhost:8000")
-    print("API docs available at http://localhost:8000/docs")
-    print("\nPress CTRL+C to stop the server\n")
-    
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
-

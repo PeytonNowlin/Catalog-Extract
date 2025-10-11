@@ -40,7 +40,68 @@ pip install -r requirements.txt
 
 ## Usage
 
-### Basic Usage
+The application can be used in two ways:
+1. **Web UI & API** - Modern web interface with REST API
+2. **Command Line** - Direct CLI for scripting
+
+### Web UI & API
+
+Start the web server:
+```bash
+python main.py
+```
+
+Then open your browser to:
+- **Web UI**: http://localhost:8000
+- **API Docs**: http://localhost:8000/docs (interactive Swagger UI)
+- **API**: http://localhost:8000/api/
+
+#### Web UI Features
+- Drag-and-drop PDF upload
+- Configure extraction options (page range, DPI, confidence)
+- Real-time progress tracking
+- View results in browser
+- Download CSV and summary reports
+- Manage multiple extraction jobs
+
+#### API Endpoints
+
+**Upload PDF and start extraction:**
+```bash
+POST /api/upload
+```
+
+**Get job status:**
+```bash
+GET /api/jobs/{job_id}
+```
+
+**Get extraction results:**
+```bash
+GET /api/jobs/{job_id}/results
+```
+
+**Download CSV:**
+```bash
+GET /api/jobs/{job_id}/download/csv
+```
+
+**Download summary:**
+```bash
+GET /api/jobs/{job_id}/download/summary
+```
+
+**List all jobs:**
+```bash
+GET /api/jobs
+```
+
+**Delete job:**
+```bash
+DELETE /api/jobs/{job_id}
+```
+
+### Command Line Interface
 
 Extract from entire catalog:
 ```bash
@@ -222,7 +283,64 @@ Edit `src/validator.py` methods:
 
 ## Examples
 
-### Example 1: Quick Test on First Page
+### Web UI Examples
+
+**Example 1: Quick Start**
+```bash
+# Start the server
+python main.py
+
+# Open browser to http://localhost:8000
+# Drag and drop your PDF
+# Click "Start Extraction"
+```
+
+**Example 2: Using the API with curl**
+```bash
+# Upload and start extraction
+curl -X POST "http://localhost:8000/api/upload?dpi=300&min_confidence=50" \
+  -F "file=@catalog.pdf"
+
+# Returns: {"job_id": "abc-123", "status": "processing", ...}
+
+# Check status
+curl http://localhost:8000/api/jobs/abc-123
+
+# Download results
+curl -O http://localhost:8000/api/jobs/abc-123/download/csv
+```
+
+**Example 3: Python API Client**
+```python
+import requests
+
+# Upload PDF
+with open('catalog.pdf', 'rb') as f:
+    response = requests.post(
+        'http://localhost:8000/api/upload',
+        files={'file': f},
+        params={'dpi': 300, 'min_confidence': 50}
+    )
+    job = response.json()
+    job_id = job['job_id']
+
+# Poll for completion
+import time
+while True:
+    status = requests.get(f'http://localhost:8000/api/jobs/{job_id}').json()
+    print(f"Progress: {status['progress']}%")
+    if status['status'] == 'completed':
+        break
+    time.sleep(2)
+
+# Get results
+results = requests.get(f'http://localhost:8000/api/jobs/{job_id}/results').json()
+print(f"Extracted {len(results)} items")
+```
+
+### CLI Examples
+
+**Example 1: Quick Test on First Page**
 
 ```bash
 python catalog_extractor.py catalog.pdf --end-page 1 --debug
@@ -230,13 +348,13 @@ python catalog_extractor.py catalog.pdf --end-page 1 --debug
 
 Check the debug images to verify OCR quality.
 
-### Example 2: Production Run with High Quality
+**Example 2: Production Run with High Quality**
 
 ```bash
 python catalog_extractor.py catalog.pdf --dpi 400 --min-confidence 70 --output-dir final_output
 ```
 
-### Example 3: Process Specific Section
+**Example 3: Process Specific Section**
 
 ```bash
 python catalog_extractor.py catalog.pdf --start-page 20 --end-page 30
