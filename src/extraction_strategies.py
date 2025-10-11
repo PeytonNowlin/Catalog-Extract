@@ -13,6 +13,15 @@ from .extractor import DataExtractor, ExtractedItem
 
 logger = logging.getLogger(__name__)
 
+# Import Claude extractor
+try:
+    from .claude_extractor import ClaudeExtractor
+    CLAUDE_AVAILABLE = True
+except ImportError as e:
+    logger.warning(f"Claude extractor not available: {e}")
+    CLAUDE_AVAILABLE = False
+    ClaudeExtractor = None
+
 
 class ExtractionStrategy(ABC):
     """Base class for extraction strategies."""
