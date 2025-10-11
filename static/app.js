@@ -122,10 +122,16 @@ async function updateJobStatus() {
         // Update progress bar
         const progressFill = document.getElementById('progressFill');
         const progressText = document.getElementById('progressText');
+        const progressPercent = document.getElementById('progressPercent');
+        const progressPage = document.getElementById('progressPage');
 
         progressFill.style.width = job.progress + '%';
-        progressFill.textContent = Math.round(job.progress) + '%';
+        progressPercent.textContent = Math.round(job.progress) + '%';
         progressText.textContent = job.message;
+        
+        if (job.current_page && job.total_pages) {
+            progressPage.textContent = `Page ${job.current_page} of ${job.total_pages}`;
+        }
 
         // Check if completed
         if (job.status === 'completed') {
@@ -154,6 +160,9 @@ async function showResults(jobId) {
         // Show results section
         document.getElementById('processingSection').style.display = 'none';
         document.getElementById('resultsSection').style.display = 'block';
+        
+        // Scroll to results
+        setTimeout(() => scrollToSection('resultsSection'), 100);
 
         // Calculate stats
         const totalItems = results.length;
@@ -284,7 +293,7 @@ async function loadRecentJobs() {
 async function viewResults(jobId) {
     currentJobId = jobId;
     await showResults(jobId);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    scrollToSection('resultsSection');
 }
 
 // View job progress
@@ -293,7 +302,7 @@ async function viewJob(jobId) {
     document.getElementById('processingSection').style.display = 'block';
     document.getElementById('resultsSection').style.display = 'none';
     startPolling();
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    scrollToSection('processingSection');
 }
 
 // Download CSV
