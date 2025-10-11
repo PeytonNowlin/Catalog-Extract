@@ -1,112 +1,179 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Catalog Extractor</title>
+    <title>Catalog Extractor - AI-Powered PDF Processing</title>
     <link rel="stylesheet" href="/static/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
 </head>
 <body>
-    <div class="container">
-        <header>
-            <h1>📄 Catalog Extractor</h1>
-            <p class="subtitle">Extract part numbers and prices from PDF catalogs using OCR</p>
-        </header>
-
-        <div class="upload-section">
-            <div class="upload-box" id="uploadBox">
-                <input type="file" id="fileInput" accept=".pdf" hidden>
-                <div class="upload-content">
-                    <div class="upload-icon">📤</div>
-                    <h3>Upload PDF Catalog</h3>
-                    <p>Click to select or drag and drop a PDF file</p>
-                    <button class="btn btn-primary" onclick="document.getElementById('fileInput').click()">
-                        Select File
-                    </button>
-                </div>
-            </div>
-
-            <div class="options-section">
-                <h3>Extraction Options</h3>
-                <div class="options-grid">
-                    <div class="option">
-                        <label for="startPage">Start Page (0-indexed)</label>
-                        <input type="number" id="startPage" value="0" min="0">
-                    </div>
-                    <div class="option">
-                        <label for="endPage">End Page (leave empty for all)</label>
-                        <input type="number" id="endPage" placeholder="All pages" min="1">
-                    </div>
-                    <div class="option">
-                        <label for="dpi">DPI (Resolution)</label>
-                        <input type="number" id="dpi" value="300" min="72" max="600">
-                    </div>
-                    <div class="option">
-                        <label for="minConfidence">Min Confidence (%)</label>
-                        <input type="number" id="minConfidence" value="50" min="0" max="100">
+    <!-- Header -->
+    <header class="header">
+        <div class="container">
+            <div class="header-content">
+                <div class="logo">
+                    <svg class="logo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    <div>
+                        <h1>Catalog Extractor</h1>
+                        <p class="logo-subtitle">AI-Powered PDF Data Extraction</p>
                     </div>
                 </div>
-                <div class="checkboxes">
-                    <label>
-                        <input type="checkbox" id="forceOcr">
-                        Force OCR (even for text-based PDFs)
-                    </label>
-                    <label>
-                        <input type="checkbox" id="debugMode">
-                        Debug Mode (save intermediate images)
-                    </label>
+                <div class="header-actions">
+                    <a href="/docs" target="_blank" class="btn-icon" title="API Documentation">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </a>
                 </div>
             </div>
         </div>
+    </header>
 
-        <div id="processingSection" class="processing-section" style="display: none;">
-            <h3>Processing...</h3>
-            <div class="progress-bar">
-                <div class="progress-fill" id="progressFill"></div>
-            </div>
-            <p class="progress-text" id="progressText">Starting...</p>
-        </div>
+    <main class="main">
+        <div class="container">
+            <!-- Upload Section -->
+            <section class="upload-section" id="uploadSection">
+                <div class="card">
+                    <div class="card-header">
+                        <h2>Upload PDF Catalog</h2>
+                        <p>Extract part numbers, prices, and product data from any PDF catalog</p>
+                    </div>
+                    <div class="card-body">
+                        <input type="file" id="fileInput" accept=".pdf" hidden>
+                        <div class="upload-zone" id="uploadBox">
+                            <svg class="upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                <path d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            </svg>
+                            <h3>Drop your PDF here</h3>
+                            <p>or click to browse</p>
+                            <button class="btn btn-primary" onclick="document.getElementById('fileInput').click()">
+                                Select File
+                            </button>
+                        </div>
 
-        <div id="resultsSection" class="results-section" style="display: none;">
-            <div class="results-header">
-                <h3>Extraction Results</h3>
-                <div class="results-actions">
-                    <button class="btn btn-success" id="downloadCsvBtn">
-                        📥 Download CSV
-                    </button>
-                    <button class="btn btn-secondary" id="downloadSummaryBtn">
-                        📊 Download Summary
-                    </button>
+                        <!-- Options Panel -->
+                        <div class="options-panel">
+                            <h3>Extraction Options</h3>
+                            <div class="options-grid">
+                                <div class="form-group">
+                                    <label for="startPage">Start Page</label>
+                                    <input type="number" id="startPage" value="0" min="0" placeholder="0">
+                                </div>
+                                <div class="form-group">
+                                    <label for="endPage">End Page</label>
+                                    <input type="number" id="endPage" placeholder="All pages" min="1">
+                                </div>
+                                <div class="form-group">
+                                    <label for="dpi">Resolution (DPI)</label>
+                                    <input type="number" id="dpi" value="300" min="72" max="600">
+                                </div>
+                                <div class="form-group">
+                                    <label for="minConfidence">Min Confidence (%)</label>
+                                    <input type="number" id="minConfidence" value="50" min="0" max="100">
+                                </div>
+                            </div>
+                            <div class="checkbox-group">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="forceOcr">
+                                    <span>Force OCR (image-based processing)</span>
+                                </label>
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="debugMode">
+                                    <span>Debug Mode (save processing images)</span>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
                 </div>
-            </div>
+            </section>
 
-            <div class="stats-grid" id="statsGrid"></div>
+            <!-- Processing Section -->
+            <section class="processing-section" id="processingSection" style="display: none;">
+                <div class="card">
+                    <div class="card-body">
+                        <div class="processing-content">
+                            <div class="spinner"></div>
+                            <h3>Processing PDF...</h3>
+                            <p id="progressText">Starting extraction...</p>
+                            <div class="progress-bar">
+                                <div class="progress-fill" id="progressFill"></div>
+                            </div>
+                            <div class="progress-stats">
+                                <span id="progressPercent">0%</span>
+                                <span id="progressPage"></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
 
-            <div class="table-container">
-                <table id="resultsTable">
-                    <thead>
-                        <tr>
-                            <th>Brand Code</th>
-                            <th>Part Number</th>
-                            <th>Price Type</th>
-                            <th>Price</th>
-                            <th>Currency</th>
-                            <th>Page</th>
-                            <th>Confidence</th>
-                        </tr>
-                    </thead>
-                    <tbody id="resultsTableBody"></tbody>
-                </table>
-            </div>
+            <!-- Results Section -->
+            <section class="results-section" id="resultsSection" style="display: none;">
+                <div class="card">
+                    <div class="card-header">
+                        <h2>Extraction Results</h2>
+                        <div class="header-actions">
+                            <button class="btn btn-success" id="downloadCsvBtn">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                    <path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                </svg>
+                                Download CSV
+                            </button>
+                            <button class="btn btn-secondary" id="downloadSummaryBtn">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                    <path d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                </svg>
+                                Summary
+                            </button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="stats-grid" id="statsGrid"></div>
+                        <div class="table-wrapper">
+                            <table class="data-table" id="resultsTable">
+                                <thead>
+                                    <tr>
+                                        <th>Brand</th>
+                                        <th>Part Number</th>
+                                        <th>Price Type</th>
+                                        <th>Price</th>
+                                        <th>Currency</th>
+                                        <th>Page</th>
+                                        <th>Confidence</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="resultsTableBody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Recent Jobs Section -->
+            <section class="jobs-section">
+                <div class="card">
+                    <div class="card-header">
+                        <h2>Recent Jobs</h2>
+                    </div>
+                    <div class="card-body">
+                        <div id="jobsList" class="jobs-list"></div>
+                    </div>
+                </div>
+            </section>
         </div>
+    </main>
 
-        <div id="jobsSection" class="jobs-section">
-            <h3>Recent Jobs</h3>
-            <div id="jobsList"></div>
+    <footer class="footer">
+        <div class="container">
+            <p>&copy; 2025 Catalog Extractor. Powered by Tesseract OCR &amp; FastAPI.</p>
         </div>
-    </div>
+    </footer>
 
     <script src="/static/app.js"></script>
 </body>
 </html>
-

@@ -88,6 +88,9 @@ async function uploadFile(file) {
         // Show processing section
         document.getElementById('processingSection').style.display = 'block';
         document.getElementById('resultsSection').style.display = 'none';
+        
+        // Scroll to processing section
+        setTimeout(() => scrollToSection('processingSection'), 100);
 
         // Start polling for status
         startPolling();
@@ -217,6 +220,14 @@ function getConfidenceClass(confidence) {
     if (confidence >= 70) return 'confidence-high';
     if (confidence >= 50) return 'confidence-medium';
     return 'confidence-low';
+}
+
+// Smooth scroll to section
+function scrollToSection(sectionId) {
+    const section = document.getElementById(sectionId);
+    if (section) {
+        section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
 }
 
 // Load recent jobs
