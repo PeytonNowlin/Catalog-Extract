@@ -39,24 +39,45 @@ function setupFileUpload() {
     const uploadBox = document.getElementById('uploadBox');
     let isUploading = false;
 
+    const handleFiles = async (fileList) => {
+        if (isUploading || !fileList || fileList.length === 0) return;
+
+        const pdfFiles = Array.from(fileList).filter(file => file.type === 'application/pdf');
+        if (pdfFiles.length === 0) {
+            alert('Please upload PDF files only.');
+            return;
+        }
+
+        isUploading = true;
+        try {
+            const interactive = pdfFiles.length === 1;
+            const uploaded = [];
+
+            for (const file of pdfFiles) {
+                const result = await uploadFile(file, { interactive });
+                if (result) uploaded.push(result);
+            }
+
+            if (!interactive && uploaded.length > 0) {
+                const queuedCount = uploaded.filter(item => item.status === 'queued').length;
+                alert(`✅ Uploaded ${uploaded.length} files. ${queuedCount} file(s) queued for processing.`);
+                await loadRecentDocuments();
+            }
+        } finally {
+            isUploading = false;
+            fileInput.value = '';
+        }
+    };
+
     uploadBox.addEventListener('click', (e) => {
         e.stopPropagation();
-        if (!isUploading) {
-            fileInput.click();
-        }
+        if (!isUploading) fileInput.click();
     });
 
-    fileInput.addEventListener('change', (e) => {
-        if (e.target.files.length > 0 && !isUploading) {
-            isUploading = true;
-            uploadFile(e.target.files[0]).finally(() => {
-                isUploading = false;
-                fileInput.value = ''; // Reset input
-            });
-        }
+    fileInput.addEventListener('change', async (e) => {
+        await handleFiles(e.target.files);
     });
 
-    // Drag and drop
     uploadBox.addEventListener('dragover', (e) => {
         e.preventDefault();
         uploadBox.classList.add('dragover');
@@ -66,27 +87,16 @@ function setupFileUpload() {
         uploadBox.classList.remove('dragover');
     });
 
-    uploadBox.addEventListener('drop', (e) => {
+    uploadBox.addEventListener('drop', async (e) => {
         e.preventDefault();
         e.stopPropagation();
         uploadBox.classList.remove('dragover');
-        
-        if (e.dataTransfer.files.length > 0 && !isUploading) {
-            const file = e.dataTransfer.files[0];
-            if (file.type === 'application/pdf') {
-                isUploading = true;
-                uploadFile(file).finally(() => {
-                    isUploading = false;
-                });
-            } else {
-                alert('Please upload a PDF file');
-            }
-        }
+        await handleFiles(e.dataTransfer.files);
     });
 }
 
 // Upload file
-async function uploadFile(file) {
+async function uploadFile(file, { interactive = true } = {}) {
     const formData = new FormData();
     formData.append('file', file);
 
@@ -156,19 +166,29 @@ async function uploadFile(file) {
         }
 
         const result = await response.json();
-        currentDocumentId = result.document_id;
-        currentPassId = result.pass_id;
 
-        // Show processing section
-        document.getElementById('processingSection').style.display = 'block';
-        document.getElementById('resultsSection').style.display = 'none';
-        setTimeout(() => scrollToSection('processingSection'), 100);
+        if (interactive) {
+            currentDocumentId = result.document_id;
+            currentPassId = result.pass_id;
 
-        // Start polling
-        startPolling();
+            document.getElementById('processingSection').style.display = 'block';
+            document.getElementById('resultsSection').style.display = 'none';
+            setTimeout(() => scrollToSection('processingSection'), 100);
+            const progressText = document.getElementById('progressText');
+            if (result.queue_position && result.queue_position > 1) {
+                progressText.textContent = `Queued in position ${result.queue_position}...`;
+            }
+            startPolling();
+        }
 
+        return result;
     } catch (error) {
-        alert('Error uploading file: ' + error.message);
+        if (interactive) {
+            alert('Error uploading file: ' + error.message);
+        } else {
+            console.error(`Upload failed for ${file.name}:`, error);
+        }
+        return null;
     }
 }
 
@@ -202,6 +222,7 @@ async function updatePassStatus() {
         const completedPasses = allPasses.filter(p => p.status === 'completed').length;
         const failedPasses = allPasses.filter(p => p.status === 'failed').length;
         const processingPasses = allPasses.filter(p => p.status === 'processing').length;
+        const pendingPasses = allPasses.filter(p => p.status === 'pending').length;
         const totalPasses = allPasses.length;
         
         // Calculate overall progress
@@ -211,12 +232,16 @@ async function updatePassStatus() {
         });
 
         // Update UI based on status
-        if (processingPasses > 0) {
+        if (processingPasses > 0 || pendingPasses > 0) {
             // Still processing
             const progress = totalPasses > 0 ? (completedPasses / totalPasses) * 100 : 0;
             progressFill.style.width = progress + '%';
             progressPercent.textContent = Math.round(progress) + '%';
-            progressText.textContent = `Pass ${completedPasses + 1}/${totalPasses} - ${totalItems} items found`;
+            if (pendingPasses > 0 && processingPasses === 0) {
+                progressText.textContent = `Queued... ${pendingPasses} pass(es) waiting`;
+            } else {
+                progressText.textContent = `Pass ${completedPasses + 1}/${totalPasses} - ${totalItems} items found`;
+            }
         } else if (completedPasses > 0 && processingPasses === 0 && failedPasses < totalPasses) {
             // All passes completed successfully
             progressFill.style.width = '100%';
