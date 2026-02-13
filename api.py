@@ -5,11 +5,13 @@ Catalog Extractor API with Database & Multi-Pass Support
 import os
 import hashlib
 import time
+import asyncio
 from pathlib import Path
 from typing import Optional, List
 from datetime import datetime
+from dataclasses import dataclass
 
-from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks, Query, Depends
+from fastapi import FastAPI, File, UploadFile, HTTPException, Query, Depends
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -29,6 +31,7 @@ import csv
 import io
 
 import logging
+import uuid
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -52,6 +55,26 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+async def start_queue_worker():
+    """Start queue worker for sequential extraction."""
+    global queue_worker_task
+    if queue_worker_task is None or queue_worker_task.done():
+        queue_worker_task = asyncio.create_task(extraction_queue_worker())
+
+
+@app.on_event("shutdown")
+async def stop_queue_worker():
+    """Stop queue worker gracefully."""
+    global queue_worker_task
+    if queue_worker_task and not queue_worker_task.done():
+        queue_worker_task.cancel()
+        try:
+            await queue_worker_task
+        except asyncio.CancelledError:
+            logger.info("[QUEUE] Extraction worker stopped")
 
 
 # Pydantic Models
@@ -97,6 +120,22 @@ class ItemResponse(BaseModel):
     extraction_method: str
 
 
+@dataclass
+class ExtractionQueueJob:
+    """Queued extraction job details."""
+    pass_id: int
+    document_id: int
+    pdf_path: str
+    options: ExtractionOptionsModel
+
+
+extraction_queue: asyncio.Queue[ExtractionQueueJob] = asyncio.Queue()
+queued_pass_ids: List[int] = []
+queue_lock = asyncio.Lock()
+active_pass_id: Optional[int] = None
+queue_worker_task: Optional[asyncio.Task] = None
+
+
 # Helper Functions
 def calculate_file_hash(file_path: str) -> str:
     """Calculate SHA256 hash of file."""
@@ -107,68 +146,112 @@ def calculate_file_hash(file_path: str) -> str:
     return sha256.hexdigest()
 
 
+def build_extracted_item_records(pass_id: int, method: str, items: list) -> List[ExtractedItem]:
+    """Build ORM records for extracted items."""
+    records = []
+    extraction_method = ExtractionMethod(method)
+
+    for item in items:
+        records.append(
+            ExtractedItem(
+                extraction_pass_id=pass_id,
+                brand_code=item.brand_code,
+                part_number=item.part_number,
+                price_type=item.price_type,
+                price_value=convert_numpy_types(item.price_value),
+                currency=item.currency,
+                page=convert_numpy_types(item.page),
+                confidence=convert_numpy_types(item.confidence),
+                raw_text=item.raw_text,
+                bbox_x=convert_numpy_types(item.bbox[0]) if item.bbox else None,
+                bbox_y=convert_numpy_types(item.bbox[1]) if item.bbox else None,
+                bbox_width=convert_numpy_types(item.bbox[2]) if item.bbox else None,
+                bbox_height=convert_numpy_types(item.bbox[3]) if item.bbox else None,
+                extraction_method=extraction_method
+            )
+        )
+
+    return records
+
+
+def get_pass_or_raise(db: Session, pass_id: int) -> ExtractionPass:
+    """Get extraction pass or raise."""
+    extraction_pass = db.query(ExtractionPass).filter(ExtractionPass.id == pass_id).first()
+    if not extraction_pass:
+        raise ValueError(f"Extraction pass {pass_id} not found")
+    return extraction_pass
+
+
 async def process_extraction_pass(
     pass_id: int,
     document_id: int,
     pdf_path: str,
     options: ExtractionOptionsModel
 ):
-    """Background task to process an extraction pass."""
+    """Process an extraction pass from the queue."""
     db = next(get_db())
     extraction_pass = None
-    
+
     try:
-        # Check if auto multi-pass mode
+        extraction_pass = get_pass_or_raise(db, pass_id)
+        extraction_pass.status = ExtractionStatus.PROCESSING
+        extraction_pass.started_at = datetime.utcnow()
+        extraction_pass.error_message = None
+        db.commit()
+
+        # Auto multi-pass mode is orchestrated by MultiPassProcessor
         if options.method == "auto_multi_pass":
             logger.info(f"Starting auto multi-pass for document {document_id}")
             processor = MultiPassProcessor(db)
-            
-            # Run auto multi-pass
             pass_ids = await processor.process_auto_multi_pass(
                 document_id,
                 pdf_path,
                 options.dict(),
                 progress_callback=None
             )
-            
-            # Consolidate results
-            logger.info(f"Consolidating results for document {document_id}")
+
             consolidate_document_items(document_id, db)
-            
-            logger.info(f"Auto multi-pass complete for document {document_id}: {len(pass_ids)} passes")
+            consolidated_count = db.query(ConsolidatedItem).filter(
+                ConsolidatedItem.document_id == document_id
+            ).count()
+
+            extraction_pass.status = ExtractionStatus.COMPLETED
+            extraction_pass.completed_at = datetime.utcnow()
+            extraction_pass.items_extracted = consolidated_count
+            extraction_pass.processing_time = (
+                extraction_pass.completed_at - extraction_pass.started_at
+            ).total_seconds() if extraction_pass.started_at else None
+            if consolidated_count:
+                consolidated_items = db.query(ConsolidatedItem).filter(
+                    ConsolidatedItem.document_id == document_id
+                ).all()
+                extraction_pass.avg_confidence = float(
+                    sum(item.avg_confidence for item in consolidated_items if item.avg_confidence is not None)
+                    / max(1, len([item for item in consolidated_items if item.avg_confidence is not None]))
+                )
+            else:
+                extraction_pass.avg_confidence = None
+            db.commit()
+
+            logger.info(
+                f"Auto multi-pass complete for document {document_id}: "
+                f"{len(pass_ids)} sub-passes, {consolidated_count} consolidated items"
+            )
             return
-        
-        # Single pass mode (original logic)
-        # Get pass from database
-        extraction_pass = db.query(ExtractionPass).filter(ExtractionPass.id == pass_id).first()
-        if not extraction_pass:
-            logger.error(f"Extraction pass {pass_id} not found")
-            return
-        
-        # Update status
-        extraction_pass.status = ExtractionStatus.PROCESSING
-        extraction_pass.started_at = datetime.utcnow()
-        db.commit()
-        
+
         start_time = time.time()
-        
-        # Initialize components
+
         pdf_handler = PDFHandler(pdf_path)
         strategy = StrategyFactory.create(options.method, options.debug_mode)
         validator = DataValidator(min_confidence=options.min_confidence)
-        
-        # Determine page range
+
         end_page = options.end_page if options.end_page else pdf_handler.page_count
-        total_pages = end_page - options.start_page
-        
         all_items = []
-        
-        # Process each page
+
         for page_num in range(options.start_page, end_page):
             logger.info(f"Pass {pass_id}: Processing page {page_num + 1}/{end_page}")
-            
+
             try:
-                # Extract using strategy
                 items = strategy.extract(
                     pdf_handler,
                     page_num,
@@ -177,56 +260,35 @@ async def process_extraction_pass(
                         'force_ocr': options.force_ocr
                     }
                 )
-                
-                # Store items in database
-                for item in items:
-                    db_item = ExtractedItem(
-                        extraction_pass_id=pass_id,
-                        brand_code=item.brand_code,
-                        part_number=item.part_number,
-                        price_type=item.price_type,
-                        price_value=convert_numpy_types(item.price_value),
-                        currency=item.currency,
-                        page=convert_numpy_types(item.page),
-                        confidence=convert_numpy_types(item.confidence),
-                        raw_text=item.raw_text,
-                        bbox_x=convert_numpy_types(item.bbox[0]) if item.bbox else None,
-                        bbox_y=convert_numpy_types(item.bbox[1]) if item.bbox else None,
-                        bbox_width=convert_numpy_types(item.bbox[2]) if item.bbox else None,
-                        bbox_height=convert_numpy_types(item.bbox[3]) if item.bbox else None,
-                        extraction_method=ExtractionMethod(options.method)
-                    )
-                    db.add(db_item)
-                    all_items.append(item)
-                
+
+                records = build_extracted_item_records(pass_id, options.method, items)
+                if records:
+                    db.bulk_save_objects(records)
+                all_items.extend(items)
                 db.commit()
-                
+
             except Exception as e:
                 logger.error(f"Error processing page {page_num}: {e}", exc_info=True)
                 db.rollback()
                 continue
-        
-        # Validate items
+
         validated_items = validator.validate_items(all_items)
         final_items = validator.deduplicate_items(validated_items)
-        
-        # Update pass status
+
         processing_time = time.time() - start_time
         extraction_pass.status = ExtractionStatus.COMPLETED
         extraction_pass.completed_at = datetime.utcnow()
         extraction_pass.items_extracted = len(final_items)
         extraction_pass.processing_time = processing_time
-        
+
         if final_items:
             extraction_pass.avg_confidence = float(sum(i.confidence for i in final_items) / len(final_items))
-        
+
         db.commit()
-        
-        # Trigger consolidation
         consolidate_document_items(document_id, db)
-        
+
         logger.info(f"Pass {pass_id} completed: {len(final_items)} items extracted")
-        
+
     except Exception as e:
         logger.error(f"Extraction failed for document {document_id}, pass {pass_id}: {e}", exc_info=True)
         if extraction_pass:
@@ -234,9 +296,50 @@ async def process_extraction_pass(
             extraction_pass.error_message = str(e)
             extraction_pass.completed_at = datetime.utcnow()
             db.commit()
-    
+
     finally:
         db.close()
+
+
+
+async def enqueue_extraction_job(job: ExtractionQueueJob) -> int:
+    """Enqueue extraction and return queue position (1 means next)."""
+    global active_pass_id
+    async with queue_lock:
+        jobs_ahead = len(queued_pass_ids) + (1 if active_pass_id else 0)
+        queued_pass_ids.append(job.pass_id)
+    await extraction_queue.put(job)
+    return jobs_ahead + 1
+
+
+async def extraction_queue_worker():
+    """Process extraction jobs sequentially."""
+    global active_pass_id
+    logger.info("[QUEUE] Extraction worker started")
+
+    while True:
+        job = await extraction_queue.get()
+        try:
+            async with queue_lock:
+                active_pass_id = job.pass_id
+                if job.pass_id in queued_pass_ids:
+                    queued_pass_ids.remove(job.pass_id)
+
+            logger.info(f"[QUEUE] Starting pass {job.pass_id} for document {job.document_id}")
+            await process_extraction_pass(
+                job.pass_id,
+                job.document_id,
+                job.pdf_path,
+                job.options
+            )
+            logger.info(f"[QUEUE] Completed pass {job.pass_id}")
+        except Exception as e:
+            logger.error(f"[QUEUE] Job failed for pass {job.pass_id}: {e}", exc_info=True)
+        finally:
+            async with queue_lock:
+                if active_pass_id == job.pass_id:
+                    active_pass_id = None
+            extraction_queue.task_done()
 
 
 def consolidate_document_items(document_id: int, db: Session):
@@ -333,7 +436,6 @@ async def root():
 
 @app.post("/api/documents/upload")
 async def upload_document(
-    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     method: str = Query("ocr_table"),
     start_page: int = Query(0),
@@ -396,7 +498,7 @@ async def upload_document(
     db.commit()
     db.refresh(extraction_pass)
     
-    # Start processing
+    # Queue processing
     options = ExtractionOptionsModel(
         method=method,
         start_page=start_page,
@@ -407,21 +509,21 @@ async def upload_document(
         debug_mode=debug_mode
     )
     
-    background_tasks.add_task(
-        process_extraction_pass,
-        extraction_pass.id,
-        document.id,
-        str(upload_path),
-        options
-    )
-    
+    queue_position = await enqueue_extraction_job(ExtractionQueueJob(
+        pass_id=extraction_pass.id,
+        document_id=document.id,
+        pdf_path=str(upload_path),
+        options=options
+    ))
+
     return {
         "document_id": document.id,
         "pass_id": extraction_pass.id,
         "filename": file.filename,
         "total_pages": document.total_pages,
         "method": method,
-        "status": "processing"
+        "status": "queued",
+        "queue_position": queue_position
     }
 
 
@@ -470,7 +572,6 @@ async def get_document(document_id: int, db: Session = Depends(get_db)):
 @app.post("/api/documents/{document_id}/passes")
 async def create_new_pass(
     document_id: int,
-    background_tasks: BackgroundTasks,
     options: ExtractionOptionsModel,
     db: Session = Depends(get_db)
 ):
@@ -503,20 +604,19 @@ async def create_new_pass(
     db.commit()
     db.refresh(extraction_pass)
     
-    # Start processing
-    background_tasks.add_task(
-        process_extraction_pass,
-        extraction_pass.id,
-        document_id,
-        pdf_path,
-        options
-    )
-    
+    queue_position = await enqueue_extraction_job(ExtractionQueueJob(
+        pass_id=extraction_pass.id,
+        document_id=document_id,
+        pdf_path=pdf_path,
+        options=options
+    ))
+
     return {
         "pass_id": extraction_pass.id,
         "pass_number": extraction_pass.pass_number,
         "method": options.method,
-        "status": "processing"
+        "status": "queued",
+        "queue_position": queue_position
     }
 
 
@@ -666,6 +766,17 @@ async def get_available_methods():
     }
 
 
+@app.get("/api/queue/status")
+async def get_queue_status():
+    """Get current extraction queue status."""
+    async with queue_lock:
+        return {
+            "active_pass_id": active_pass_id,
+            "queued_pass_ids": queued_pass_ids.copy(),
+            "queue_size": len(queued_pass_ids)
+        }
+
+
 @app.get("/api/health")
 async def health_check(db: Session = Depends(get_db)):
     """Health check."""
@@ -760,8 +871,4 @@ async def extract_raw_text(file: UploadFile = File(...)):
 
 # Mount static files
 app.mount("/static", StaticFiles(directory="static"), name="static")
-
-
-# Add missing import
-import uuid
 
